@@ -123,6 +123,12 @@ Note: AI bindings require `--remote`. The `dev` script already includes it.
 
 ## Firmware setup
 
+### Easy install (no toolchain needed)
+
+Open **`https://YOUR_WORKER.workers.dev/flash`** in Chrome or Edge, plug in the device, click Flash. Uses the latest release binary.
+
+### Build from source
+
 Requirements: [PlatformIO](https://platformio.org/) (VS Code extension or CLI).
 
 No hardcoded config needed. Flash as-is:

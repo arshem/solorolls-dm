@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AI-Lite Flash</title>
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <h1><img src="favicon-96x96.png" alt="ai lite" height="50" valign="middle" /> AI-Lite Flash</h1>
+
+    <section>
+      <h2>Requirements</h2>
+      <p>Chrome or Edge on desktop (Web Serial not supported in Firefox/Safari).</p>
+      <p>Plug in your AI-Lite via USB. Put it in flash mode: hold <strong>Boot</strong> (GPIO 0 button), tap <strong>Reset</strong>, release Boot.</p>
+    </section>
+
+    <section>
+      <h2>Firmware</h2>
+      <div id="releaseInfo" class="hint">Loading latest release…</div>
+      <div class="row" style="margin-top:0.5rem">
+        <button id="flashBtn" onclick="startFlash()" disabled>Connect &amp; Flash</button>
+        <span id="status"></span>
+      </div>
+      <progress id="prog" value="0" max="100" style="width:100%;margin-top:0.75rem;display:none"></progress>
+      <pre id="log" style="font-size:0.75rem;max-height:200px;overflow-y:auto;background:#111;padding:0.5rem;border-radius:4px;margin-top:0.5rem;display:none"></pre>
+    </section>
+
+    <section>
+      <h2>After flashing</h2>
+      <ol>
+        <li>Press Reset on the device.</li>
+        <li>Connect to the <strong>AI-Lite-Setup</strong> WiFi AP that appears.</li>
+        <li>Enter your WiFi credentials, Worker URL, and API key in the portal.</li>
+        <li>Hold <strong>Button A</strong> to wake and record; release to send.</li>
+      </ol>
+    </section>
+
+    <script type="module">
+      const REPO = 'konsumer/ailite-cf'
+      const BIN_NAME = 'firmware-merged.bin'
+      const FLASH_OFFSET = 0x0
+
+      const $ = id => document.getElementById(id)
+      const log = msg => {
+        const el = $('log')
+        el.style.display = 'block'
+        el.textContent += msg + '\n'
+        el.scrollTop = el.scrollHeight
+      }
+      const setStatus = msg => { $('status').textContent = msg }
+
+      let firmwareUrl = null
+      let firmwareVersion = null
+
+      async function loadRelease() {
+        try {
+          const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+          if (!r.ok) throw new Error(`GitHub API ${r.status}`)
+          const data = await r.json()
+          const asset = data.assets.find(a => a.name === BIN_NAME)
+          if (!asset) throw new Error(`${BIN_NAME} not found in release`)
+          firmwareUrl = asset.browser_download_url
+          firmwareVersion = data.tag_name
+          $('releaseInfo').textContent = `Version: ${firmwareVersion} — ${(asset.size / 1024).toFixed(0)} kB`
+          $('flashBtn').disabled = false
+        } catch (e) {
+          $('releaseInfo').textContent = `Could not load release: ${e.message}`
+        }
+      }
+
+      async function startFlash() {
+        if (!firmwareUrl) return
+        $('flashBtn').disabled = true
+        $('log').textContent = ''
+        $('log').style.display = 'block'
+        $('prog').style.display = 'block'
+        $('prog').value = 0
+
+        try {
+          // Dynamically load esptool-js from CDN
+          const { ESPLoader, Transport } = await import('https://unpkg.com/esptool-js@0.4.5/bundle.js')
+
+          setStatus('Connecting…')
+          log('Requesting serial port…')
+
+          const port = await navigator.serial.requestPort()
+          const transport = new Transport(port, true)
+
+          const loader = new ESPLoader({
+            transport,
+            baudrate: 921600,
+            terminal: { clean: () => {}, writeLine: s => log(s), write: s => log(s) }
+          })
+
+          log('Connecting to chip…')
+          const chip = await loader.main()
+          log(`Chip: ${chip}`)
+          setStatus(`Connected: ${chip}`)
+
+          log(`Fetching firmware ${firmwareVersion}…`)
+          const resp = await fetch(firmwareUrl)
+          if (!resp.ok) throw new Error(`Download failed: ${resp.status}`)
+          const buf = await resp.arrayBuffer()
+          log(`Downloaded: ${(buf.byteLength / 1024).toFixed(0)} kB`)
+
+          // esptool-js wants base64
+          const bytes = new Uint8Array(buf)
+          let binary = ''
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+          const b64 = btoa(binary)
+
+          setStatus('Flashing…')
+          log('Erasing + writing flash…')
+
+          await loader.writeFlash({
+            fileArray: [{ data: b64, address: FLASH_OFFSET }],
+            flashSize: 'keep',
+            flashMode: 'keep',
+            flashFreq: 'keep',
+            eraseAll: false,
+            compress: true,
+            reportProgress: (i, written, total) => {
+              $('prog').value = Math.round((written / total) * 100)
+            }
+          })
+
+          log('Flash complete. Resetting…')
+          await loader.hardReset()
+          await transport.disconnect()
+
+          $('prog').value = 100
+          setStatus('Done! Device is resetting.')
+          log('Done.')
+        } catch (e) {
+          setStatus('Error')
+          log(`Error: ${e.message}`)
+          console.error(e)
+        } finally {
+          $('flashBtn').disabled = false
+        }
+      }
+
+      window.startFlash = startFlash
+      loadRelease()
+    </script>
+  </body>
+</html>
