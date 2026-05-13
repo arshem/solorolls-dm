@@ -34,7 +34,7 @@
     <section>
       <h2>After flashing</h2>
       <ol>
-        <li>Press Reset on the device.</li>
+        <li>Release the Boot button (if still held), then press <strong>Reset</strong>.</li>
         <li>Connect to the <strong>AI-Lite-Setup</strong> WiFi AP that appears.</li>
         <li>Enter your WiFi credentials, Worker URL, and API key in the portal.</li>
         <li>Hold <strong>Button A</strong> to wake and record; release to send.</li>
@@ -42,8 +42,6 @@
     </section>
 
     <script type="module">
-      const REPO = 'konsumer/ailite-cf'
-      const BIN_NAME = 'firmware.factory.bin'
       const FLASH_OFFSET = 0x0
 
       const $ = id => document.getElementById(id)
@@ -55,27 +53,22 @@
       }
       const setStatus = msg => { $('status').textContent = msg }
 
-      let firmwareUrl = null
       let firmwareVersion = null
 
       async function loadRelease() {
         try {
-          const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
-          if (!r.ok) throw new Error(`GitHub API ${r.status}`)
-          const data = await r.json()
-          const asset = data.assets.find(a => a.name === BIN_NAME)
-          if (!asset) throw new Error(`${BIN_NAME} not found in release`)
-          firmwareUrl = asset.browser_download_url
-          firmwareVersion = data.tag_name
-          $('releaseInfo').textContent = `Version: ${firmwareVersion} — ${(asset.size / 1024).toFixed(0)} kB`
+          // HEAD request to get version header without downloading the binary
+          const r = await fetch('/firmware.bin', { method: 'HEAD' })
+          if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+          firmwareVersion = r.headers.get('X-Firmware-Version') ?? 'unknown'
+          $('releaseInfo').textContent = `Version: ${firmwareVersion}`
           $('flashBtn').disabled = false
         } catch (e) {
-          $('releaseInfo').textContent = `Could not load release: ${e.message}`
+          $('releaseInfo').textContent = `Could not load release info: ${e.message}`
         }
       }
 
       async function startFlash() {
-        if (!firmwareUrl) return
         $('flashBtn').disabled = true
         $('log').textContent = ''
         $('log').style.display = 'block'
@@ -104,22 +97,24 @@
           setStatus(`Connected: ${chip}`)
 
           log(`Fetching firmware ${firmwareVersion}…`)
-          const resp = await fetch(firmwareUrl)
+          const resp = await fetch('/firmware.bin')
           if (!resp.ok) throw new Error(`Download failed: ${resp.status}`)
           const buf = await resp.arrayBuffer()
           log(`Downloaded: ${(buf.byteLength / 1024).toFixed(0)} kB`)
 
-          // esptool-js wants base64
+          // esptool-js writeFlash expects a binary string (not base64)
           const bytes = new Uint8Array(buf)
           let binary = ''
-          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-          const b64 = btoa(binary)
+          const CHUNK = 0x8000
+          for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+          }
 
           setStatus('Flashing…')
           log('Erasing + writing flash…')
 
           await loader.writeFlash({
-            fileArray: [{ data: b64, address: FLASH_OFFSET }],
+            fileArray: [{ data: binary, address: FLASH_OFFSET }],
             flashSize: 'keep',
             flashMode: 'keep',
             flashFreq: 'keep',
@@ -130,8 +125,7 @@
             }
           })
 
-          log('Flash complete. Resetting…')
-          await loader.hardReset()
+          log('Done! Press the Reset button on the device to boot.')
           await transport.disconnect()
 
           $('prog').value = 100

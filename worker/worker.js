@@ -333,6 +333,26 @@ async function handleApi(request, env, ctx) {
 
   if (path === "/ws") return handleWebSocket(request, env)
 
+  if (path === "/firmware.bin") {
+    const LATEST = "https://github.com/konsumer/ailite-cf/releases/latest/download/firmware.factory.bin"
+    // First redirect gives us the versioned URL (e.g. .../download/v1.2.3/firmware.factory.bin)
+    const redir = await fetch(LATEST, { redirect: "manual" })
+    const location = redir.headers.get("Location") ?? LATEST
+    const versionMatch = location.match(/\/download\/(v[^/]+)\//)
+    const version = versionMatch ? versionMatch[1] : "unknown"
+    const headers = {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": `attachment; filename="firmware-${version}.factory.bin"`,
+      "X-Firmware-Version": version,
+      "Cache-Control": "public, max-age=3600",
+      "Access-Control-Allow-Origin": "*"
+    }
+    if (request.method === "HEAD") return new Response(null, { headers })
+    const bin = await fetch(location)
+    if (!bin.ok) return new Response("Firmware download failed", { status: 502 })
+    return new Response(bin.body, { headers })
+  }
+
   const user = await getUser(request, env)
   if (!user) return new Response("Unauthorized", { status: 401 })
 
@@ -349,7 +369,7 @@ async function handleApi(request, env, ctx) {
   return new Response("Not Found", { status: 404 })
 }
 
-const API_PATHS = ["/admin/", "/whoami", "/config", "/chat", "/ws"]
+const API_PATHS = ["/admin/", "/whoami", "/config", "/chat", "/ws", "/firmware.bin"]
 
 export default {
   async fetch(request, env, ctx) {
