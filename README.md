@@ -6,13 +6,14 @@ Press the button, speak, get a spoken response. All AI runs on Cloudflare — no
 
 ## How it works
 
-1. First boot (or hold button A on boot): connect to **AI-Lite-Setup** WiFi AP, enter your WiFi credentials, Worker URL, and API key in the captive portal
-2. Device sleeps — hold **button B** to wake
-3. Hold button B and speak; the device records your voice over an open WebSocket
-4. Release button B — audio is sent to the worker
-5. Worker runs: Whisper STT → Llama LLM → Deepgram Aura-2 TTS
-6. Device plays the streamed MP3 response through the speaker
-7. Device sleeps after 10 seconds
+1. [flash your aipilite](https://ailite.konsumer.workers.dev/flash)
+2. First boot (or hold button A on boot): connect to **AI-Lite-Setup** WiFi AP, enter your WiFi credentials, Worker URL, and API key in the captive portal
+3. Device sleeps — hold **button B** to wake
+4. Hold button B and speak; the device records your voice over an open WebSocket
+5. Release button B — audio is sent to the worker
+6. Worker runs: Whisper STT → Llama LLM → Deepgram Aura-2 TTS
+7. Device plays the streamed MP3 response through the speaker
+8. Device sleeps after 10 seconds
 
 ## Worker setup
 
