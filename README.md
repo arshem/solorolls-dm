@@ -4,6 +4,9 @@ Cloudflare Worker + ESP32 firmware for an AI voice assistant on the [AI-Lite](ht
 
 Press the button, speak, get a spoken response. All AI runs on Cloudflare — no external services needed.
 
+https://github.com/user-attachments/assets/4efa78af-b0c0-42c3-a23f-0ffadb4cd5f6
+
+
 ## How it works
 
 1. [flash your aipilite](https://ailite.konsumer.workers.dev/flash)
