@@ -1,0 +1,162 @@
+# ailite-cf
+
+Cloudflare Worker + ESP32 firmware for an AI voice assistant on the [AI-Lite](https://www.elecrow.com/ai-lite-esp32-s3-ai-development-board.html) device.
+
+Press the button, speak, get a spoken response. All AI runs on Cloudflare — no external services needed.
+
+## How it works
+
+1. Press button A to wake the device
+2. Hold button A to record your voice
+3. Release — audio uploads to the worker
+4. Worker runs: Whisper STT → Llama LLM → MeloTTS
+5. Device plays the MP3 response through the speaker
+
+## Worker setup
+
+You need a [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier works).
+
+```bash
+npm install
+
+# Create the KV namespace for personality storage
+npx wrangler kv namespace create CONFIG
+# Copy the printed ID into wrangler.toml → id = "..."
+
+# Set your API secret (used to authenticate the device)
+npm run admin_key
+npx wrangler secret put API_SECRET
+
+# Deploy
+npm run deploy
+```
+
+### Web UI
+
+After deploying, open `https://YOUR_WORKER.workers.dev/` in a browser. Log in with your primary `API_SECRET` to manage users, or with a user key to chat and configure.
+
+### User management
+
+The primary `API_SECRET` is admin-only. Create user keys through the web UI admin panel, or via API:
+
+```bash
+# Create a user
+curl -X POST https://YOUR_WORKER.workers.dev/admin/keys \
+  -H "Authorization: Bearer your-primary-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice"}'
+# Returns: {"key": "<key to share with Alice>", ...}
+
+# List users
+curl https://YOUR_WORKER.workers.dev/admin/keys \
+  -H "Authorization: Bearer your-primary-secret"
+
+# Delete a user
+curl -X DELETE https://YOUR_WORKER.workers.dev/admin/keys/<key> \
+  -H "Authorization: Bearer your-primary-secret"
+```
+
+Each user gets their own key and can configure their own personality, voice model, and language.
+
+### Endpoints
+
+| Method | Path | Auth | Body | Response |
+|--------|------|------|------|----------|
+| `GET`  | `/` | none | — | Web UI |
+| `GET`  | `/whoami` | user | — | `{"name":"...","isAdmin":bool}` |
+| `POST` | `/chat` | user | raw WAV audio | MP3 stream |
+| `POST` | `/chat` | user | `{"text":"..."}` | `{"text":"...","audio":"<base64>"}` |
+| `GET`  | `/config` | user | — | user config JSON |
+| `POST` | `/config` | user | config fields | `OK` |
+| `GET`  | `/admin/keys` | primary | — | list of users |
+| `POST` | `/admin/keys` | primary | `{"name":"..."}` | `{"key":"..."}` |
+| `DELETE` | `/admin/keys/:key` | primary | — | `OK` |
+
+### Voice models
+
+| `ttsModel` value | Description | Streaming |
+|------------------|-------------|-----------|
+| `melotts` | MeloTTS — en, es, fr, zh, jp, ko | no |
+| `aura-2-en` | Deepgram Aura-2 English — 37 voices | yes |
+| `aura-2-es` | Deepgram Aura-2 Spanish — 37 voices | yes |
+
+Aura-2 streams audio to the device as it generates — faster time-to-first-sound. MeloTTS buffers the full response first.
+
+### Local development
+
+```bash
+npm run dev
+```
+
+Note: AI bindings don't work in `wrangler dev` without `--remote`. Use `npm run dev -- --remote` to test the full pipeline.
+
+## Firmware setup
+
+Requirements: [PlatformIO](https://platformio.org/) (VS Code extension or CLI).
+
+No hardcoded config needed. Flash as-is:
+
+```bash
+cd firmware
+pio run --target upload
+pio device monitor   # to see serial output
+```
+
+### First boot setup
+
+On first boot the device appears as a WiFi AP named **AI-Lite-Setup**. Connect to it and a captive portal opens. Enter:
+- Your home WiFi credentials
+- Worker URL (`https://YOUR_WORKER.workers.dev`)
+- Your user API key (created in the web UI)
+
+Settings are saved to flash. The device fetches its personality, voice model, and language from the worker on each boot using the key.
+
+To reconfigure at any time, press **button B** — the portal reopens.
+
+To reset everything, erase flash:
+
+```bash
+pio run --target erase
+```
+
+### Button reference
+
+| Button | Action |
+|--------|--------|
+| A (left) | Wake from sleep / hold to record |
+| B (right) | Reopen config portal |
+
+The device sleeps automatically after 30 seconds of inactivity.
+
+## AI models used
+
+All run on Cloudflare's network — no third-party API keys needed beyond your CF account.
+
+| Step | Model |
+|------|-------|
+| Speech → Text | `@cf/openai/whisper-large-v3-turbo` |
+| Text → Response | `@cf/meta/llama-3.1-8b-instruct` |
+| Response → Speech | `@cf/myshell-ai/melotts` |
+
+## Costs
+
+Cloudflare Workers AI has a free tier (10,000 neurons/day). Each conversation turn uses roughly:
+- Whisper: ~5–15 neurons depending on audio length
+- Llama 3.1 8B: ~10–30 neurons depending on response length
+- MeloTTS: ~5–10 neurons
+
+In practice, the free tier supports hundreds of conversations per day.
+
+## Project structure
+
+```
+ailite-cf/
+├── worker/src/index.js   ← Cloudflare Worker
+├── firmware/
+│   ├── platformio.ini
+│   └── src/
+│       ├── main.cpp      ← ESP32 firmware
+│       └── pins.h        ← GPIO definitions
+├── wrangler.toml
+└── package.json
+```

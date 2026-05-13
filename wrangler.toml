@@ -1,0 +1,11 @@
+name = "ailite"
+main = "worker/src/index.js"
+compatibility_date = "2024-11-01"
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "CONFIG"
+id = "783f27ea6b424502b92eba670314d75f"
+remote=true

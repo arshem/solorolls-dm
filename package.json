@@ -1,0 +1,12 @@
+{
+  "name": "ailite-cf",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx -y wrangler@latest dev",
+    "start": "npx -y wrangler@latest dev",
+    "deploy": "npx -y wrangler@latest deploy",
+    "admin_key": "node -e 'console.log(require(`crypto`).randomBytes(32).toString(`hex`))'"
+  }
+}
