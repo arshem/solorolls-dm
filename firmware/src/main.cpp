@@ -12,19 +12,17 @@
 #include <Arduino_GFX_Library.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
-#include <ArduinoWebsockets.h>
+#include <WebSocketsClient.h>
+#include "AudioTools.h"
 #include "AudioTools/AudioLibs/I2SCodecStream.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "pins.h"
 
-using namespace websockets;
-
-#define SLEEP_AFTER_MS  10000UL
+#define SLEEP_AFTER_MS  30000UL
 #define REC_RATE_HW     24000
 #define REC_CH_HW       2
 #define REC_BITS        16
@@ -46,16 +44,20 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_CLK,
 Arduino_GFX    *gfx = new Arduino_ST7735(bus, PIN_LCD_RST, 3, false, 128, 128, 0, 0);
 
 void showMsg(const char *top, const char *bot = nullptr, uint16_t col = RGB565_WHITE) {
-  gfx->fillRect(0, 20, 128, 90, RGB565_BLACK);
+  gfx->fillRect(0, 20, 128, 108, RGB565_BLACK);
   gfx->setTextColor(col);
   gfx->setTextSize(2);
   gfx->setCursor(4, 30);
   gfx->println(top);
   if (bot) {
+    // truncate to ~84 chars (7 lines × 12 chars at textSize 1)
+    char buf[85];
+    strncpy(buf, bot, 84);
+    buf[84] = '\0';
     gfx->setTextColor(RGB565_WHITE);
     gfx->setTextSize(1);
     gfx->setCursor(4, 58);
-    gfx->println(bot);
+    gfx->println(buf);
   }
 }
 
@@ -91,13 +93,14 @@ void savePrefs() {
 // ── Sleep ─────────────────────────────────────────────────────────────────────
 
 void goSleep() {
-  showMsg("ZZZ", "hold B to wake", RGB565_BLUE);
+  showMsg("ZZZ", "hold A to wake", RGB565_BLUE);
   delay(700);
   gfx->fillScreen(RGB565_BLACK);
   digitalWrite(PIN_LCD_BL,  LOW);
   digitalWrite(PIN_SPKR_EN, LOW);
   rtc_gpio_hold_en((gpio_num_t)PIN_PWR_CTL);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN_B, 0);
+  // PIN_BTN_A = GPIO 1 is RTC-capable; PIN_BTN_B = GPIO 42 is not
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN_A, 0);
   esp_deep_sleep_start();
 }
 
@@ -192,107 +195,230 @@ String buildWsUrl() {
 }
 
 // ── Voice turn ────────────────────────────────────────────────────────────────
+// Core 0: WS task runs ws.loop() under mutex continuously.
+// Core 1: main thread checks button, drives state; never calls ws.loop() itself.
+// All codec + display + WS operations are protected by g_mutex.
 
-void doVoiceTurn() {
-  // Connect WiFi (uses saved credentials from prior portal)
+static SemaphoreHandle_t  g_mutex        = nullptr;
+static WebSocketsClient   g_ws;
+static volatile bool      g_wsTaskRun    = false;
+static TaskHandle_t       g_wsTaskHandle = nullptr;
+
+// Shared state (written under mutex or from atomic flag ops)
+static MP3DecoderHelix    *g_mp3          = nullptr;
+static EncodedAudioOutput *g_decoded      = nullptr;
+static volatile bool       g_wsConnected  = false;
+static volatile bool       g_pipelineDone = false;
+static volatile bool       g_recording    = false;
+static size_t              g_audioBytes   = 0;
+
+static inline void hwLock()   { xSemaphoreTake(g_mutex, portMAX_DELAY); }
+static inline void hwUnlock() { xSemaphoreGive(g_mutex); }
+
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
+  // Runs on Core 0 inside ws.loop(), already under g_mutex.
+  switch (type) {
+    case WStype_CONNECTED:
+      g_wsConnected = true;
+      Serial.println("WS connected");
+      break;
+
+    case WStype_DISCONNECTED:
+      Serial.println("WS disconnected");
+      break;
+
+    case WStype_BIN:
+      if (!g_recording) {
+        g_audioBytes += length;
+        if (g_decoded) g_decoded->write(payload, length);
+      }
+      break;
+
+    case WStype_TEXT: {
+      JsonDocument doc;
+      if (deserializeJson(doc, payload, length) != DeserializationError::Ok) break;
+      const char *t = doc["type"] | "";
+      Serial.printf("msg: %s\n", t);
+
+      if (strcmp(t, "transcript") == 0) {
+        if (!g_recording) showMsg("You:", doc["text"] | "...");
+      } else if (strcmp(t, "response") == 0) {
+        if (!g_recording) showMsg("AI:", doc["text"] | "...");
+      } else if (strcmp(t, "audio_start") == 0) {
+        if (!g_recording) {
+          g_audioBytes = 0;
+          codecBeginPlay();
+          digitalWrite(PIN_SPKR_EN, HIGH);
+          g_mp3     = new MP3DecoderHelix();
+          g_decoded = new EncodedAudioOutput(&i2s, g_mp3);
+          g_decoded->begin();
+        }
+      } else if (strcmp(t, "audio_end") == 0) {
+        g_pipelineDone = true;
+      } else if (strcmp(t, "error") == 0) {
+        if (!g_recording) showMsg("ERR", doc["message"] | "?", RGB565_RED);
+        g_pipelineDone = true;
+      }
+      break;
+    }
+    default: break;
+  }
+}
+
+static void wsLoopTask(void *) {
+  while (g_wsTaskRun) {
+    hwLock();
+    g_ws.loop();
+    hwUnlock();
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+  vTaskDelete(nullptr);
+}
+
+static void stopAudio() {
+  // Must be called under g_mutex.
+  if (g_decoded) { g_decoded->end(); delete g_decoded; g_decoded = nullptr; }
+  if (g_mp3)    { delete g_mp3;    g_mp3    = nullptr; }
+  i2s.end();
+  digitalWrite(PIN_SPKR_EN, LOW);
+}
+
+bool doVoiceTurn() {
+  if (!g_mutex) g_mutex = xSemaphoreCreateMutex();
+
+  g_wsConnected  = false;
+  g_pipelineDone = false;
+  g_recording    = false;
+  g_decoded      = nullptr;
+  g_mp3          = nullptr;
+
+  // ── WiFi ─────────────────────────────────────────────────────────────────────
   showMsg("WiFi...");
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin();
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) delay(200);
   if (WiFi.status() != WL_CONNECTED) {
     showMsg("WiFi", "failed", RGB565_RED);
     delay(2000);
-    return;
+    return false;
   }
+  delay(500);
 
-  // Connect WebSocket
-  showMsg("Connect...");
-  WebsocketsClient ws;
-  ws.setInsecure(); // allow self-signed / CF edge certs without pinning
+  // ── WebSocket ─────────────────────────────────────────────────────────────────
   String wsUrl = buildWsUrl();
-  if (!ws.connect(wsUrl)) {
-    showMsg("WS", "failed", RGB565_RED);
-    delay(2000);
-    return;
-  }
+  bool isSecure = wsUrl.startsWith("wss://");
+  String noScheme = wsUrl.substring(isSecure ? 6 : 5);
+  int slash = noScheme.indexOf('/');
+  String wsHost = noScheme.substring(0, slash);
+  String wsPath = noScheme.substring(slash);
+  int wsPort = isSecure ? 443 : 80;
+  Serial.printf("WS %s:%d%s\n", wsHost.c_str(), wsPort, wsPath.c_str());
 
-  // Record while Button B held
-  showMsg("REC", "release to send", RGB565_RED);
-  codecBeginRec();
-  size_t rawLen = 0;
-  static uint8_t chunk[512];
-  while (digitalRead(PIN_BTN_B) == LOW) {
-    if (rawLen >= RAW_MAX) break;
-    size_t n = i2s.readBytes(chunk, min(sizeof(chunk), RAW_MAX - rawLen));
-    if (n > 0) { memcpy(rawBuf + rawLen, chunk, n); rawLen += n; }
-  }
-  i2s.end();
+  showMsg("Connect...");
+  g_ws.onEvent(onWsEvent);
+  if (isSecure) g_ws.beginSSL(wsHost, wsPort, wsPath);
+  else          g_ws.begin(wsHost, wsPort, wsPath);
+  g_ws.setReconnectInterval(0);
 
-  if (!rawLen) { ws.close(); return; }
+  // Spin up WS task on Core 0
+  g_wsTaskRun = true;
+  xTaskCreatePinnedToCore(wsLoopTask, "ws", 8192, nullptr, 2, &g_wsTaskHandle, 0);
 
-  // Downsample → WAV → send in chunks
-  showMsg("SEND", nullptr, RGB565_YELLOW);
-  size_t outSamples = downsample(
-    (const int16_t *)rawBuf, rawLen / (REC_CH_HW * REC_BITS / 8),
-    (int16_t *)(wavBuf + WAV_HDR_SIZE)
-  );
-  size_t pcmLen = outSamples * (REC_BITS / 8);
-  buildWAVHeader(wavBuf, pcmLen);
-
-  size_t total = WAV_HDR_SIZE + pcmLen;
-  for (size_t pos = 0; pos < total; ) {
-    size_t n = min((size_t)1024, total - pos);
-    ws.sendBinary((const char *)(wavBuf + pos), n);
-    pos += n;
-  }
-  ws.sendText("{\"type\":\"done\"}");
-
-  // Receive pipeline results
-  MP3DecoderHelix mp3Decoder;
-  EncodedAudioOutput *decoded = nullptr;
-  bool pipelineDone = false;
-
-  ws.onMessage([&](WebsocketsMessage msg) {
-    if (msg.isBinary()) {
-      if (decoded) decoded->write((uint8_t *)msg.rawData().c_str(), msg.rawData().length());
-      return;
-    }
-    JsonDocument doc;
-    if (deserializeJson(doc, msg.data()) != DeserializationError::Ok) return;
-    const char *type = doc["type"] | "";
-
-    if (strcmp(type, "transcript") == 0) {
-      showMsg("You:", doc["text"] | "...");
-    } else if (strcmp(type, "response") == 0) {
-      showMsg("AI:", doc["text"] | "...");
-    } else if (strcmp(type, "audio_start") == 0) {
-      codecBeginPlay();
-      digitalWrite(PIN_SPKR_EN, HIGH);
-      decoded = new EncodedAudioOutput(&i2s, &mp3Decoder);
-      decoded->begin();
-    } else if (strcmp(type, "audio_end") == 0) {
-      if (decoded) { decoded->end(); delete decoded; decoded = nullptr; }
-      i2s.end();
-      digitalWrite(PIN_SPKR_EN, LOW);
-      pipelineDone = true;
-    } else if (strcmp(type, "error") == 0) {
-      showMsg("ERR", doc["message"] | "?", RGB565_RED);
-      if (decoded) { decoded->end(); delete decoded; decoded = nullptr; }
-      pipelineDone = true;
-    }
-  });
-
+  // Wait for connection (main thread just polls flag)
   t = millis();
-  while (!pipelineDone && ws.available() && millis() - t < 60000) {
-    ws.poll();
+  while (!g_wsConnected && millis() - t < 10000) delay(20);
+  if (!g_wsConnected) {
+    g_wsTaskRun = false;
+    vTaskDelay(pdMS_TO_TICKS(50));
+    showMsg("WS", "failed", RGB565_RED);
+    delay(5000);
+    return false;
   }
 
-  if (decoded) { decoded->end(); delete decoded; }
-  ws.close();
+  // ── Session loop ──────────────────────────────────────────────────────────────
+  static uint8_t chunk[512];
+  unsigned long idleStart = millis();
 
-  showMsg("Done", "sleeping soon...", RGB565_BLUE);
-  delay(SLEEP_AFTER_MS);
+  while (true) {
+    // Idle: button check only — WS task keeps connection alive on Core 0
+    hwLock(); showMsg("Ready", "hold A: speak", RGB565_GREEN); hwUnlock();
+    while (digitalRead(PIN_BTN_A) != LOW) {
+      if (millis() - idleStart > SLEEP_AFTER_MS) {
+        hwLock(); stopAudio(); g_ws.disconnect(); hwUnlock();
+        g_wsTaskRun = false;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        return false;
+      }
+      delay(10);
+    }
+
+    // A pressed — stop playback immediately (no ws.loop() needed here)
+    hwLock(); stopAudio(); hwUnlock();
+    g_pipelineDone = false;
+
+    // ── Record ───────────────────────────────────────────────────────────────
+    hwLock(); showMsg("REC", "release to send", RGB565_RED); hwUnlock();
+    g_recording = true;
+    hwLock(); codecBeginRec(); hwUnlock();
+    size_t rawLen = 0;
+    while (digitalRead(PIN_BTN_A) == LOW) {
+      if (rawLen >= RAW_MAX) break;
+      // i2s DMA read — no mutex needed (Core 0 is blocked by g_recording flag)
+      size_t n = i2s.readBytes(chunk, min(sizeof(chunk), RAW_MAX - rawLen));
+      if (n > 0) { memcpy(rawBuf + rawLen, chunk, n); rawLen += n; }
+    }
+    hwLock(); i2s.end(); hwUnlock();
+    g_recording = false;
+    if (!rawLen) continue;
+
+    // ── Downsample → WAV → send ───────────────────────────────────────────────
+    hwLock(); showMsg("SEND", nullptr, RGB565_YELLOW); hwUnlock();
+    size_t outSamples = downsample(
+      (const int16_t *)rawBuf, rawLen / (REC_CH_HW * REC_BITS / 8),
+      (int16_t *)(wavBuf + WAV_HDR_SIZE)
+    );
+    size_t pcmLen = outSamples * (REC_BITS / 8);
+    buildWAVHeader(wavBuf, pcmLen);
+
+    size_t total = WAV_HDR_SIZE + pcmLen;
+    hwLock();
+    for (size_t pos = 0; pos < total; ) {
+      size_t n = min((size_t)1024, total - pos);
+      g_ws.sendBIN(wavBuf + pos, n);
+      pos += n;
+    }
+    g_ws.sendTXT("{\"type\":\"done\"}");
+    hwUnlock();
+
+    // ── Wait for response — button always responsive ───────────────────────────
+    t = millis();
+    while (!g_pipelineDone && millis() - t < 60000) {
+      if (digitalRead(PIN_BTN_A) == LOW) goto next_turn; // interrupt playback
+      delay(10);
+    }
+
+    if (g_pipelineDone) {
+      // Audio plays in real-time; only DMA tail remains after audio_end.
+      // Aura-2 MP3 ≈ 32 kbps. Add 1 s safety margin. Button still interrupts.
+      unsigned long playMs = (g_audioBytes * 1000UL / 4000UL) + 1000UL;
+      Serial.printf("drain: %u bytes ~%lu ms\n", g_audioBytes, playMs);
+      t = millis();
+      while (millis() - t < playMs) {
+        if (digitalRead(PIN_BTN_A) == LOW) goto next_turn;
+        delay(10);
+      }
+    }
+    hwLock(); stopAudio(); hwUnlock();
+    idleStart = millis();
+    continue;
+
+    next_turn:
+    hwLock(); stopAudio(); hwUnlock();
+    g_pipelineDone = false;
+    idleStart = millis();
+  }
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -327,20 +453,24 @@ void setup() {
 
   loadPrefs();
 
-  // Woke from Button B press → do voice turn
+  // Woke from Button A (ext0) → check Button B for portal, else voice turn
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
-    doVoiceTurn();
+    if (digitalRead(PIN_BTN_B) == LOW) {
+      openPortal();
+    } else {
+      doVoiceTurn();
+    }
     goSleep();
     return;
   }
 
-  // First boot / manual reset: Button A held OR missing credentials → portal
-  if (digitalRead(PIN_BTN_A) == LOW || !strlen(workerUrl) || !strlen(apiKey)) {
+  // First boot / manual reset: missing credentials OR Button B held → portal
+  if (!strlen(workerUrl) || !strlen(apiKey) || digitalRead(PIN_BTN_B) == LOW) {
     openPortal();
   }
 
   if (!strlen(workerUrl) || !strlen(apiKey)) {
-    showMsg("No config", "hold A on boot", RGB565_RED);
+    showMsg("No config", "hold B on boot", RGB565_RED);
     delay(5000);
   }
 
@@ -348,7 +478,6 @@ void setup() {
 }
 
 void loop() {
-  // Deep sleep re-enters setup(); loop() runs only if something goes wrong.
   doVoiceTurn();
   goSleep();
 }

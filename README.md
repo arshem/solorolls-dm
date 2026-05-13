@@ -154,10 +154,12 @@ pio run --target erase
 
 | Button | Action |
 |--------|--------|
-| A (left) | Hold on boot to open config portal |
-| B (right) | Hold to wake and record a voice message |
+| A (left) | Hold to wake from sleep / hold to record voice |
+| B (right) | Hold on boot (or hold A then also hold B) to open config portal |
 
 After playback finishes, the device sleeps automatically after 10 seconds.
+
+Note: only GPIO 0–21 can wake the ESP32-S3 from deep sleep (RTC GPIO constraint). Button A = GPIO 1 is RTC-capable; Button B = GPIO 42 is not, so A is the wake source.
 
 ## AI models used
 

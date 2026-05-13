@@ -3,3 +3,4 @@ node_modules
 .wrangler
 .env
 test/out.mp3
+.pio

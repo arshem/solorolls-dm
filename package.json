@@ -8,6 +8,7 @@
     "start": "npx -y wrangler@latest dev --remote",
     "deploy": "npx -y wrangler@latest deploy",
     "admin_key": "node -e 'console.log(require(`crypto`).randomBytes(32).toString(`hex`))'",
-    "test": "node --test --env-file .env"
+    "test": "node --test --env-file .env",
+    "firmware": "cd firmware && pio run -t upload -t monitor"
   }
 }
