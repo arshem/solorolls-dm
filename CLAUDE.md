@@ -43,21 +43,21 @@ Connection stays open for multi-turn conversation.
 Hardware: AI-Lite = ESP32-S3, ES8311 codec (I2C + I2S), ST7735 LCD, 8MB PSRAM, two buttons.
 Pin definitions in `firmware/src/pins.h` — don't change without checking hardware.
 
-Key libs: `arduino-audio-tools`, `arduino-audio-driver`, `Arduino_GFX_Library`, `WiFiManager`, `ArduinoJson`.
+Key libs: `arduino-audio-tools`, `arduino-audio-driver`, `Arduino_GFX_Library`, `WiFiManager`, `ArduinoJson`, `gilmaimon/ArduinoWebsockets`.
 
 **NVS (Preferences):** stores `workerUrl` and `apiKey` under namespace `"ailite"`. No hardcoded config.
 
-**Captive portal:** WiFiManager with two custom params (Worker URL, API Key). Button B reopens portal anytime via `reopenPortal()`.
+**Captive portal:** WiFiManager with two custom params (Worker URL, API Key). Opened on first boot or when Button A held at boot. Portal SSID: "AI-Lite-Setup", timeout 300 s.
 
-**Boot flow:** deep sleep → button A wakes → WiFiManager connects → fetch `/config` (populates `DeviceConfig cfg`) → show `cfg.name` → hold A to record → send audio over WebSocket `/ws` → play streamed MP3 response → sleep after 30s idle. (Firmware currently uses HTTP POST `/chat`; WebSocket path is implemented on the worker and ready for firmware migration.)
+**Boot flow (wake from Button B / `ESP_SLEEP_WAKEUP_EXT0`):** `WiFi.begin()` with saved creds → WebSocket connect (`ws://` or `wss://` derived from workerUrl) → codec RX_MODE 24kHz stereo → record while Button B held → downsample 24kHz stereo→16kHz mono → build WAV header → send WAV in 1kB chunks → send `{"type":"done"}` → wait for pipeline messages → codec TX_MODE for playback → stream MP3 binary frames through `EncodedAudioOutput`+`MP3DecoderHelix` → `audio_end` received → wait 10 s → deep sleep.
 
-**`DeviceConfig`:** populated from `GET /config` JSON. `cfg.isStreaming = (ttsModel starts with "aura-2")`.
+**Boot flow (first boot / reset):** Button A held OR missing NVS credentials → `openPortal()` → save NVS → deep sleep. Credentials present and A not held → deep sleep immediately (wake via Button B).
 
-**Playback modes:**
-- `cfg.isStreaming = true` → `playStreaming()`: feeds HTTP chunks directly into helix → I2S in real time
-- `cfg.isStreaming = false` → `playBuffered()`: downloads full MP3 into PSRAM, then decodes
+**Button mapping:** A = hold on boot to reconfigure; B = hold to start voice turn (wake source).
 
-`EncodedAudioOutput` + `MP3DecoderHelix` handles decode in both paths. Codec init at 24kHz stereo; helix `setAudioInfo` callback adjusts if actual rate differs.
+**WebSocket URL:** constructed from `workerUrl` by replacing `https://`→`wss://`, `http://`→`ws://`, appending `/ws?key=<apiKey>`. `ws.setInsecure()` used for wss connections.
+
+`EncodedAudioOutput` + `MP3DecoderHelix` handles MP3 decode. Codec switches between `RX_MODE` (record) and `TX_MODE` (play) via separate `i2s.begin()` calls.
 
 ## Hardware reference
 

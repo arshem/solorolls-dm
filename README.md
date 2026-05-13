@@ -6,11 +6,13 @@ Press the button, speak, get a spoken response. All AI runs on Cloudflare — no
 
 ## How it works
 
-1. Press button A to wake the device
-2. Hold button A to record your voice
-3. Release — audio uploads to the worker
-4. Worker runs: Whisper STT → Llama LLM → Deepgram Aura-2 TTS
-5. Device plays the streamed MP3 response through the speaker
+1. First boot (or hold button A on boot): connect to **AI-Lite-Setup** WiFi AP, enter your WiFi credentials, Worker URL, and API key in the captive portal
+2. Device sleeps — hold **button B** to wake
+3. Hold button B and speak; the device records your voice over an open WebSocket
+4. Release button B — audio is sent to the worker
+5. Worker runs: Whisper STT → Llama LLM → Deepgram Aura-2 TTS
+6. Device plays the streamed MP3 response through the speaker
+7. Device sleeps after 10 seconds
 
 ## Worker setup
 
@@ -138,9 +140,9 @@ On first boot the device appears as a WiFi AP named **AI-Lite-Setup**. Connect t
 - Worker URL (`https://YOUR_WORKER.workers.dev`)
 - Your user API key (created in the web UI)
 
-Settings are saved to flash. The device fetches its personality and voice config from the worker on each boot.
+Settings are saved to flash. The device then sleeps until button B is held.
 
-To reconfigure at any time, press **button B** — the portal reopens.
+To reconfigure at any time, hold **button A** on boot — the portal reopens.
 
 To reset everything, erase flash:
 
@@ -152,10 +154,10 @@ pio run --target erase
 
 | Button | Action |
 |--------|--------|
-| A (left) | Wake from sleep / hold to record |
-| B (right) | Reopen config portal |
+| A (left) | Hold on boot to open config portal |
+| B (right) | Hold to wake and record a voice message |
 
-The device sleeps automatically after 30 seconds of inactivity.
+After playback finishes, the device sleeps automatically after 10 seconds.
 
 ## AI models used
 
