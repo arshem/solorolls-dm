@@ -15,14 +15,18 @@
 #include "pins.h"
 
 #define SLEEP_MS      30000UL
-#define REC_RATE      16000
-#define REC_CH        1
+#define REC_RATE_HW   24000   // ES8311 hardware rate (known-working from reference)
+#define REC_CH_HW     2       // ES8311 always outputs stereo frames
+#define REC_RATE      16000   // Whisper target rate
+#define REC_CH        1       // Whisper target channels
 #define REC_BITS      16
 #define MAX_REC_SEC   10
 #define WAV_HDR_SIZE  44
 #define MP3_BUF_SIZE  (300 * 1024)
 
-static const size_t PCM_MAX = (size_t)REC_RATE * (REC_BITS / 8) * REC_CH * MAX_REC_SEC;
+// rawBuf holds 24kHz stereo during capture; wavBuf holds WAV header + 16kHz mono PCM
+static const size_t RAW_MAX = (size_t)REC_RATE_HW * (REC_BITS / 8) * REC_CH_HW * MAX_REC_SEC;
+static const size_t PCM_MAX = (size_t)REC_RATE    * (REC_BITS / 8) * REC_CH    * MAX_REC_SEC;
 static const size_t WAV_MAX = WAV_HDR_SIZE + PCM_MAX;
 
 // ── Persisted settings (NVS) ──────────────────────────────────────────────────
@@ -49,8 +53,10 @@ AudioBoard    board(AudioDriverES8311, myPins);
 I2SCodecStream i2s(board);
 
 // ── PSRAM buffers ─────────────────────────────────────────────────────────────
-static uint8_t *wavBuf = nullptr;
+static uint8_t *rawBuf = nullptr;   // 24kHz stereo capture
+static uint8_t *wavBuf = nullptr;   // WAV header + 16kHz mono PCM
 static uint8_t *mp3Buf = nullptr;
+static size_t   rawLen = 0;
 static size_t   pcmLen = 0;
 static size_t   mp3Len = 0;
 
@@ -189,7 +195,8 @@ void buildWAVHeader(uint8_t *buf, uint32_t pcmBytes) {
 // ── Codec helpers ─────────────────────────────────────────────────────────────
 
 void codecBeginRec() {
-  AudioInfo info(REC_RATE, REC_CH, REC_BITS);
+  // 24kHz stereo matches ES8311 hardware reference — library resamples if needed
+  AudioInfo info(REC_RATE_HW, REC_CH_HW, REC_BITS);
   auto c         = i2s.defaultConfig(RX_MODE);
   c.copyFrom(info);
   c.input_device  = ADC_INPUT_LINE1;
@@ -197,6 +204,24 @@ void codecBeginRec() {
   c.mclk_multiple = 256;
   i2s.begin(c);
   i2s.setInputVolume(0.8f);
+}
+
+// Downsample 24kHz stereo int16 → 16kHz mono int16 with linear interpolation.
+// Returns number of output samples written to dst.
+size_t downsampleTo16kMono(const int16_t *src, size_t srcFrames, int16_t *dst) {
+  // 24kHz→16kHz = 3:2 ratio: every 3 input frames → 2 output samples
+  size_t out = 0;
+  size_t i = 0;
+  while (i + 2 < srcFrames) {
+    // Mix L+R to mono for each frame
+    int32_t m0 = ((int32_t)src[i*2]     + src[i*2+1])     / 2;
+    int32_t m1 = ((int32_t)src[(i+1)*2] + src[(i+1)*2+1]) / 2;
+    int32_t m2 = ((int32_t)src[(i+2)*2] + src[(i+2)*2+1]) / 2;
+    dst[out++] = (int16_t)m0;
+    dst[out++] = (int16_t)((m1 + m2) / 2);
+    i += 3;
+  }
+  return out;
 }
 
 void codecBeginPlay() {
@@ -215,20 +240,30 @@ void codecBeginPlay() {
 // ── Record ────────────────────────────────────────────────────────────────────
 
 void recordUntilRelease() {
+  rawLen = 0;
   pcmLen = 0;
   codecBeginRec();
   showMsg("REC", "release to send", RGB565_RED);
 
   static uint8_t chunk[512];
   while (digitalRead(PIN_BTN_A) == LOW) {
-    if (pcmLen >= PCM_MAX) break;
-    size_t n = i2s.readBytes(chunk, sizeof(chunk));
-    if (n > 0 && pcmLen + n <= PCM_MAX) {
-      memcpy(wavBuf + WAV_HDR_SIZE + pcmLen, chunk, n);
-      pcmLen += n;
+    if (rawLen >= RAW_MAX) break;
+    size_t n = i2s.readBytes(chunk, min(sizeof(chunk), RAW_MAX - rawLen));
+    if (n > 0) {
+      memcpy(rawBuf + rawLen, chunk, n);
+      rawLen += n;
     }
   }
   i2s.end();
+
+  // Downsample 24kHz stereo → 16kHz mono into wavBuf (after header)
+  size_t srcFrames = rawLen / (REC_CH_HW * (REC_BITS / 8));
+  size_t outSamples = downsampleTo16kMono(
+    (const int16_t *)rawBuf,
+    srcFrames,
+    (int16_t *)(wavBuf + WAV_HDR_SIZE)
+  );
+  pcmLen = outSamples * (REC_BITS / 8);
 }
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
@@ -372,9 +407,10 @@ void setup() {
   gfx->println("AI-Lite");
   gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
 
+  rawBuf = (uint8_t *)ps_malloc(RAW_MAX);
   wavBuf = (uint8_t *)ps_malloc(WAV_MAX);
   mp3Buf = (uint8_t *)ps_malloc(MP3_BUF_SIZE);
-  if (!wavBuf || !mp3Buf) {
+  if (!rawBuf || !wavBuf || !mp3Buf) {
     showMsg("PSRAM", "fail", RGB565_RED);
     while (true) delay(1000);
   }

@@ -83,8 +83,9 @@ async function runTTS(text, config, env, wantStream = false) {
   // melotts — returns base64, no native streaming
   const result = await env.AI.run("@cf/myshell-ai/melotts", {
     prompt: text,
-    lang: config.ttsLang ?? "en",
+    lang: (config.ttsLang ?? "en").toUpperCase(),
   })
+  if (!result?.audio) throw new Error(`MeloTTS returned no audio (lang=${config.ttsLang})`)
   const bytes = fromBase64(result.audio)
   if (wantStream) {
     const stream = new ReadableStream({
