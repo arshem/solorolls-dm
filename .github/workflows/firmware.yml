@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-merged
-          path: firmware/.pio/build/ailite/firmware-merged.bin
+          path: firmware/.pio/build/ailite/firmware.factory.bin
           if-no-files-found: error
 
   release:
@@ -44,5 +44,5 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: firmware-merged.bin
+          files: firmware.factory.bin
           generate_release_notes: true
