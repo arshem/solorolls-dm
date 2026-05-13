@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AI-Lite</title>
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <h1><img src="favicon-96x96.png" alt="ai lite" height="50" valign="middle" /> AI-Lite</h1>
+    <section>
+      <h2>Auth</h2>
+      <label for="apikey">API Key</label>
+      <div class="row">
+        <input type="password" id="apikey" placeholder="paste your key" autocomplete="off" />
+        <button onclick="login()">Connect</button>
+        <button onclick="logout()" id="logoutBtn" class="hidden">Logout</button>
+      </div>
+      <div class="hint" id="whoami"></div>
+    </section>
+
+    <section id="chatSection" class="hidden">
+      <h2>Chat</h2>
+      <div id="chat"></div>
+      <div class="row">
+        <input type="text" id="msg" placeholder="Type something..." onkeydown="if (event.key === 'Enter') send()" style="flex: 1" />
+        <button class="primary" id="sendBtn" onclick="send()">Send</button>
+        <button id="recBtn" onclick="toggleRec()" title="Record voice">⏺</button>
+      </div>
+      <div class="hint" id="status"></div>
+    </section>
+
+    <section id="cfgSection" class="hidden">
+      <h2>My Config</h2>
+
+      <label>Personality</label>
+      <textarea id="personality" rows="3"></textarea>
+      <label>Language</label>
+      <select id="ttsModel" onchange="onModelChange('')">
+        <option value="aura-2-en">English</option>
+        <option value="aura-2-es">Español</option>
+      </select>
+      <label>Voice</label>
+      <select id="ttsVoice"></select>
+      <div class="row" style="margin-top: 0.75rem">
+        <button class="primary" onclick="saveConfig()">Save</button>
+        <span class="flash" id="cfgFlash">Saved</span>
+      </div>
+    </section>
+
+    <section id="adminSection" class="hidden">
+      <h2>Admin — Users</h2>
+      <details style="margin-bottom: 0.75rem">
+        <summary style="cursor: pointer; font-size: 0.85rem; color: #888">Create new user</summary>
+        <div style="margin-top: 0.5rem">
+          <label>Name</label>
+          <input type="text" id="newName" placeholder="Alice" />
+
+          <label>Personality</label>
+          <textarea id="new_personality" rows="3"></textarea>
+          <label>Language</label>
+          <select id="new_ttsModel" onchange="onModelChange('new_')">
+            <option value="aura-2-en">English</option>
+            <option value="aura-2-es">Español</option>
+          </select>
+          <label>Voice</label>
+          <select id="new_ttsVoice"></select>
+          <div class="row" style="margin-top: 0.75rem">
+            <button class="primary" onclick="createUser()">Create</button>
+          </div>
+          <div id="newKeyBox" class="hidden" style="margin-top: 0.6rem">
+            <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.3rem">Key (shown once — copy now):</div>
+            <div class="key-val" id="newKeyVal"></div>
+          </div>
+        </div>
+      </details>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Model</th>
+            <th>Key</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="userTable"></tbody>
+      </table>
+    </section>
+
+    <script src="/index.js"></script>
+  </body>
+</html>

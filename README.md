@@ -9,8 +9,8 @@ Press the button, speak, get a spoken response. All AI runs on Cloudflare — no
 1. Press button A to wake the device
 2. Hold button A to record your voice
 3. Release — audio uploads to the worker
-4. Worker runs: Whisper STT → Llama LLM → MeloTTS
-5. Device plays the MP3 response through the speaker
+4. Worker runs: Whisper STT → Llama LLM → Deepgram Aura-2 TTS
+5. Device plays the streamed MP3 response through the speaker
 
 ## Worker setup
 
@@ -51,36 +51,65 @@ curl -X POST https://YOUR_WORKER.workers.dev/admin/keys \
 curl https://YOUR_WORKER.workers.dev/admin/keys \
   -H "Authorization: Bearer your-primary-secret"
 
+# Update a user
+curl -X PUT https://YOUR_WORKER.workers.dev/admin/keys/<key> \
+  -H "Authorization: Bearer your-primary-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice", "ttsModel": "aura-2-en", "ttsVoice": "luna"}'
+
 # Delete a user
 curl -X DELETE https://YOUR_WORKER.workers.dev/admin/keys/<key> \
   -H "Authorization: Bearer your-primary-secret"
 ```
 
-Each user gets their own key and can configure their own personality, voice model, and language.
+Each user gets their own key and can configure their own personality and voice.
 
 ### Endpoints
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
-| `GET`  | `/` | none | — | Web UI |
-| `GET`  | `/whoami` | user | — | `{"name":"...","isAdmin":bool}` |
+| `GET` | `/` | none | — | Web UI |
+| `GET` | `/whoami` | user | — | `{"name":"...","isAdmin":bool}` |
 | `POST` | `/chat` | user | raw WAV audio | MP3 stream |
 | `POST` | `/chat` | user | `{"text":"..."}` | `{"text":"...","audio":"<base64>"}` |
-| `GET`  | `/config` | user | — | user config JSON |
+| `GET` | `/config` | user | — | user config JSON |
 | `POST` | `/config` | user | config fields | `OK` |
-| `GET`  | `/admin/keys` | primary | — | list of users |
+| `GET` | `/admin/keys` | primary | — | list of users |
 | `POST` | `/admin/keys` | primary | `{"name":"..."}` | `{"key":"..."}` |
+| `PUT` | `/admin/keys/:key` | primary | config fields | `OK` |
 | `DELETE` | `/admin/keys/:key` | primary | — | `OK` |
+| `GET` | `/ws?key=<key>` | query param | WebSocket upgrade | streaming voice pipeline |
+
+### WebSocket voice pipeline
+
+The `/ws` endpoint is the real-time path for devices. Connect with your API key as a query param:
+
+```
+ws://YOUR_WORKER.workers.dev/ws?key=YOUR_USER_KEY
+```
+
+**Device → Worker** (binary frames = audio chunks; text frames = JSON control):
+- Stream audio binary frames as the user speaks
+- Send `{"type":"done"}` when the button is released
+
+**Worker → Device** (in order):
+- `{"type":"transcript","text":"..."}` — what Whisper heard
+- `{"type":"response","text":"..."}` — LLM reply text
+- `{"type":"audio_start"}` — TTS about to stream
+- Binary MP3 frames (pipe directly to decoder as they arrive)
+- `{"type":"audio_end"}` — done, ready for next turn
+- `{"type":"error","message":"..."}` — if anything fails
+
+The connection stays open for multi-turn conversation. No reconnect needed between questions.
 
 ### Voice models
 
-| `ttsModel` value | Description | Streaming |
-|------------------|-------------|-----------|
-| `melotts` | MeloTTS — en, es, fr, zh, jp, ko | no |
-| `aura-2-en` | Deepgram Aura-2 English — 37 voices | yes |
-| `aura-2-es` | Deepgram Aura-2 Spanish — 37 voices | yes |
+| `ttsModel` | Language | Voices | Streaming |
+|------------|----------|--------|-----------|
+| `aura-2-en` | English | 39 | yes |
+| `aura-2-es` | Spanish | 10 | yes |
 
-Aura-2 streams audio to the device as it generates — faster time-to-first-sound. MeloTTS buffers the full response first.
+Aura-2 streams audio as it generates — the device can start playing before the full response is ready. The web UI lets you pick English or Español and choose a voice from the correct list for that language.
 
 ### Local development
 
@@ -88,7 +117,7 @@ Aura-2 streams audio to the device as it generates — faster time-to-first-soun
 npm run dev
 ```
 
-Note: AI bindings don't work in `wrangler dev` without `--remote`. Use `npm run dev -- --remote` to test the full pipeline.
+Note: AI bindings require `--remote`. The `dev` script already includes it.
 
 ## Firmware setup
 
@@ -109,7 +138,7 @@ On first boot the device appears as a WiFi AP named **AI-Lite-Setup**. Connect t
 - Worker URL (`https://YOUR_WORKER.workers.dev`)
 - Your user API key (created in the web UI)
 
-Settings are saved to flash. The device fetches its personality, voice model, and language from the worker on each boot using the key.
+Settings are saved to flash. The device fetches its personality and voice config from the worker on each boot.
 
 To reconfigure at any time, press **button B** — the portal reopens.
 
@@ -136,14 +165,14 @@ All run on Cloudflare's network — no third-party API keys needed beyond your C
 |------|-------|
 | Speech → Text | `@cf/openai/whisper-large-v3-turbo` |
 | Text → Response | `@cf/meta/llama-3.1-8b-instruct` |
-| Response → Speech | `@cf/myshell-ai/melotts` |
+| Response → Speech | `@cf/deepgram/aura-2-en` or `@cf/deepgram/aura-2-es` |
 
 ## Costs
 
 Cloudflare Workers AI has a free tier (10,000 neurons/day). Each conversation turn uses roughly:
 - Whisper: ~5–15 neurons depending on audio length
 - Llama 3.1 8B: ~10–30 neurons depending on response length
-- MeloTTS: ~5–10 neurons
+- Aura-2: ~5–10 neurons
 
 In practice, the free tier supports hundreds of conversations per day.
 
@@ -151,12 +180,17 @@ In practice, the free tier supports hundreds of conversations per day.
 
 ```
 ailite-cf/
-├── worker/src/index.js   ← Cloudflare Worker
+├── worker/
+│   ├── worker.js         ← Cloudflare Worker
+│   └── public/           ← Web UI (static assets)
 ├── firmware/
 │   ├── platformio.ini
 │   └── src/
 │       ├── main.cpp      ← ESP32 firmware
 │       └── pins.h        ← GPIO definitions
+├── test/
+│   ├── stream.test.mjs   ← WebSocket pipeline tests
+│   └── test.wav          ← test audio
 ├── wrangler.toml
 └── package.json
 ```

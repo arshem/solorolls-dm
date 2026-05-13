@@ -1,9 +1,14 @@
 name = "ailite"
-main = "worker/src/index.js"
+main = "./worker/worker.js"
 compatibility_date = "2024-11-01"
 
 [ai]
 binding = "AI"
+
+[assets]
+binding = "ASSETS"
+directory = "./worker/public"
+html_handling = "drop-trailing-slash"
 
 [[kv_namespaces]]
 binding = "CONFIG"
