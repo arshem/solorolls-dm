@@ -59,6 +59,7 @@ void showHeader() {
   gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
 }
 
+// System messages (WiFi, SEND, errors): big label + optional small subtext.
 void showMsg(const char *top, const char *bot = nullptr, uint16_t col = RGB565_WHITE) {
   gfx->fillRect(0, 20, 128, 108, RGB565_BLACK);
   gfx->setTextColor(col);
@@ -74,6 +75,16 @@ void showMsg(const char *top, const char *bot = nullptr, uint16_t col = RGB565_W
     gfx->setCursor(4, 58);
     gfx->println(buf);
   }
+}
+
+// Chat text: full-width word-wrap, no label. Yellow = user, white = AI.
+void showChat(const char *text, uint16_t col) {
+  gfx->fillRect(0, 20, 128, 108, RGB565_BLACK);
+  gfx->setTextColor(col);
+  gfx->setTextSize(1);
+  gfx->setTextWrap(true);
+  gfx->setCursor(0, 20);
+  gfx->print(text);
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
@@ -284,9 +295,9 @@ void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       if (deserializeJson(doc, payload, length) != DeserializationError::Ok) break;
       const char *t = doc["type"] | "";
       if (strcmp(t, "transcript") == 0) {
-        showMsg("You:", doc["text"] | "...");
+        showChat(doc["text"] | "...", RGB565_YELLOW);
       } else if (strcmp(t, "response") == 0) {
-        showMsg("AI:", doc["text"] | "...");
+        showChat(doc["text"] | "...", RGB565_WHITE);
       } else if (strcmp(t, "audio_start") == 0) {
         g_audioBytes = 0;
         codecBeginPlay();
@@ -381,21 +392,6 @@ void doVoiceTurn() {
     showMsg("WiFi", "failed", RGB565_RED); delay(2000); return;
   }
 
-  // Cache DHCP result on first successful connect to speed future connects.
-  if (!cachedIp) {
-    cachedIp  = (uint32_t)WiFi.localIP();
-    cachedGw  = (uint32_t)WiFi.gatewayIP();
-    cachedSn  = (uint32_t)WiFi.subnetMask();
-    cachedDns = (uint32_t)WiFi.dnsIP();
-    Preferences prefs;
-    prefs.begin("ailite", false);
-    prefs.putUInt("ip",  cachedIp);
-    prefs.putUInt("gw",  cachedGw);
-    prefs.putUInt("sn",  cachedSn);
-    prefs.putUInt("dns", cachedDns);
-    prefs.end();
-  }
-
   // Connect WebSocket.
   showMsg("Connect...");
   {
@@ -467,9 +463,6 @@ void doVoiceTurn() {
   g_wsTaskRun = false;
   vTaskDelay(pdMS_TO_TICKS(50));
   g_ws.disconnect();
-
-  // Update assistant name now that WiFi is up — off the critical path.
-  fetchName();
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -485,7 +478,6 @@ void setup() {
   Serial.begin(115200);
   gfx->begin();
   gfx->fillScreen(RGB565_BLACK);
-  showHeader();
 
   rawBuf = (uint8_t *)ps_malloc(RAW_MAX);
   wavBuf = (uint8_t *)ps_malloc(WAV_MAX);
@@ -496,6 +488,7 @@ void setup() {
 
   g_mutex = xSemaphoreCreateMutex();
   loadPrefs();
+  showHeader(); // after loadPrefs so cached assistantName is shown
 
   // B held at boot → config portal.
   delay(50);
@@ -514,8 +507,37 @@ void setup() {
     return;
   }
 
+  bool fromSleep = (esp_reset_reason() == ESP_RST_DEEPSLEEP);
+
+  if (!fromSleep) {
+    // Power-cycle: connect WiFi (full DHCP), refresh name and IP cache.
+    // Only writes NVS if values actually changed — protects flash lifetime.
+    showMsg("WiFi...");
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.begin(wifiSsid, wifiPass);
+    unsigned long t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) delay(100);
+    if (WiFi.status() == WL_CONNECTED) {
+      uint32_t newIp  = (uint32_t)WiFi.localIP();
+      uint32_t newGw  = (uint32_t)WiFi.gatewayIP();
+      uint32_t newSn  = (uint32_t)WiFi.subnetMask();
+      uint32_t newDns = (uint32_t)WiFi.dnsIP();
+      if (newIp != cachedIp || newGw != cachedGw || newSn != cachedSn || newDns != cachedDns) {
+        cachedIp = newIp; cachedGw = newGw; cachedSn = newSn; cachedDns = newDns;
+        Preferences prefs;
+        prefs.begin("ailite", false);
+        prefs.putUInt("ip", cachedIp); prefs.putUInt("gw", cachedGw);
+        prefs.putUInt("sn", cachedSn); prefs.putUInt("dns", cachedDns);
+        prefs.end();
+      }
+      fetchName(); // writes NVS only if name changed
+    }
+    showHeader();
+  }
+
   // Woke from deep sleep via Button A → voice turn immediately.
-  if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+  if (fromSleep) {
     doVoiceTurn();
   }
 
