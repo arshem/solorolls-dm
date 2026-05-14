@@ -43,19 +43,39 @@ Connection stays open for multi-turn conversation.
 Hardware: AI-Lite = ESP32-S3, ES8311 codec (I2C + I2S), ST7735 LCD, 8MB PSRAM, two buttons.
 Pin definitions in `firmware/src/pins.h` — don't change without checking hardware.
 
-Key libs: `arduino-audio-tools`, `arduino-audio-driver`, `Arduino_GFX_Library`, `WiFiManager`, `ArduinoJson`, `gilmaimon/ArduinoWebsockets`.
+Key libs: `arduino-audio-tools`, `arduino-audio-driver`, `Arduino_GFX_Library`, `WebServer`, `DNSServer`, `HTTPClient`, `ArduinoJson`, `gilmaimon/ArduinoWebsockets`.
 
-**NVS (Preferences):** stores `workerUrl` and `apiKey` under namespace `"ailite"`. No hardcoded config.
+**NVS (Preferences):** namespace `"ailite"` stores: `wifiSsid`, `wifiPass`, `workerUrl`, `apiKey`, `assistantName` (cached from `/config`), `ip`/`gw`/`sn`/`dns` (cached DHCP for fast reconnect).
 
-**Captive portal:** WiFiManager with two custom params (Worker URL, API Key). Opened on first boot or when Button A held at boot. Portal SSID: "AI-Lite-Setup", timeout 300 s.
+**Captive portal:** custom `WebServer`+`DNSServer` on AP `"AI-Lite-Setup"`. HTML served from `portal.h`. Scans networks, shows dropdown. POST `/save` receives JSON `{ssid, password, workerUrl, apiKey}`, writes NVS, clears IP cache, restarts. Timeout 300 s.
 
-**Boot flow (wake from Button B / `ESP_SLEEP_WAKEUP_EXT0`):** `WiFi.begin()` with saved creds → WebSocket connect (`ws://` or `wss://` derived from workerUrl) → codec RX_MODE 24kHz stereo → record while Button B held → downsample 24kHz stereo→16kHz mono → build WAV header → send WAV in 1kB chunks → send `{"type":"done"}` → wait for pipeline messages → codec TX_MODE for playback → stream MP3 binary frames through `EncodedAudioOutput`+`MP3DecoderHelix` → `audio_end` received → wait 10 s → deep sleep.
+**Button mapping:** A (GPIO 1, RTC-capable) = wake source + hold to record; B (GPIO 42, not RTC) = config portal trigger (while awake only).
 
-**Boot flow (first boot / reset):** Button A held OR missing NVS credentials → `openPortal()` → save NVS → deep sleep. Credentials present and A not held → deep sleep immediately (wake via Button B).
+**Boot flow (power-on / reset):**
+1. B held → `openPortal()` → `goSleep()`
+2. Missing creds → show message → `openPortal()` → `goSleep()`
+3. Woke from deep sleep (`ESP_RST_DEEPSLEEP`) → `doVoiceTurn()` → idle loop
+4. Otherwise → idle loop
 
-**Button mapping:** A = hold on boot to reconfigure; B = hold to start voice turn (wake source).
+**Idle loop:** A held → `doVoiceTurn()` (resets timeout); B held → `openPortal()`; timeout (`SLEEP_AFTER_MS`) → `goSleep()`.
 
-**WebSocket URL:** constructed from `workerUrl` by replacing `https://`→`wss://`, `http://`→`ws://`, appending `/ws?key=<apiKey>`. `ws.setInsecure()` used for wss connections.
+**`doVoiceTurn()` flow:**
+1. `WiFi.begin(ssid, pass)` — async; uses cached IP to skip DHCP if available
+2. `codecBeginRec()` immediately — recording starts while WiFi connects
+3. Record into PSRAM `rawBuf` while A held; `i2s.end()` on release
+4. Wait for WiFi (up to 15 s); on first connect, save DHCP values to NVS
+5. Connect WebSocket (`wss://` from `https://` workerUrl, `/ws?key=<apiKey>`); WS task spawned on Core 0
+6. Downsample 24kHz stereo→16kHz mono; build WAV header; send in 1kB chunks; send `{"type":"done"}`
+7. Wait for `audio_end` (or A interrupt); drain MP3 DMA buffer; `stopAudio()`
+8. Stop WS task; `fetchName()` (GET `/config`, updates `assistantName` in NVS + header if changed)
+
+**WS task (Core 0):** runs `g_ws.loop()` under `g_mutex` every 2 ms. `onWsEvent` handles binary (feed to `EncodedAudioOutput`+`MP3DecoderHelix`) and JSON messages (update display, start/stop codec, set `g_pipeDone`).
+
+**`showHeader()`:** redraws top bar (y 0–14) with `assistantName`. Called at boot and when name changes.
+
+**Sleep:** `esp_sleep_enable_ext0_wakeup(PIN_BTN_A, 0)` — GPIO 1 is RTC-capable. `rtc_gpio_hold_en(PIN_PWR_CTL)` keeps power rail active during sleep.
+
+**WebSocket URL:** `https://` → `wss://`, `http://` → `ws://`, append `/ws?key=<apiKey>`. `beginSSL()` skips cert verification by default.
 
 `EncodedAudioOutput` + `MP3DecoderHelix` handles MP3 decode. Codec switches between `RX_MODE` (record) and `TX_MODE` (play) via separate `i2s.begin()` calls.
 
