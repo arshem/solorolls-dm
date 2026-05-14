@@ -19,3 +19,5 @@ make a src/local/users.json file liek this:
 replace `ADMIN_KEY` and `API_KEY` with yours.
 
 Run with `npm start`
+
+You also have the same UI for editing, so you can tweak the personality.
