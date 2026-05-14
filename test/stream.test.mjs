@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 
-// const BASE = 'ws://localhost:8787'
-const BASE = 'wss://ailite.konsumer.workers.dev'
+const BASE = 'ws://localhost:8787'
+// const BASE = 'wss://ailite.konsumer.workers.dev'
 
 const { API_SECRET, API_KEY } = process.env
 const KEY = API_KEY || API_SECRET

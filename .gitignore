@@ -5,3 +5,4 @@ node_modules
 test/out.mp3
 .pio
 users.json
+__pycache__

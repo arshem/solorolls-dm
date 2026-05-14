@@ -1,8 +1,8 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 
-// const BASE = 'http://localhost:8787'
-const BASE = 'https://ailite.konsumer.workers.dev'
+const BASE = 'http://localhost:8787'
+// const BASE = 'https://ailite.konsumer.workers.dev'
 
 const { API_SECRET, API_KEY } = process.env
 const KEY = API_KEY || API_SECRET

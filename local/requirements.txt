@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+faster-whisper
+ollama
+RealtimeTTS[kokoro]
+lameenc
+numpy

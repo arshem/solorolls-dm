@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npx -y wrangler@latest dev --remote",
-    "start": "npx -y wrangler@latest dev --remote",
+    "start": "python local/server.py",
     "deploy": "npx -y wrangler@latest deploy",
     "admin_key": "node -e 'console.log(require(`crypto`).randomBytes(32).toString(`hex`))'",
     "test": "node --test --env-file .env",
