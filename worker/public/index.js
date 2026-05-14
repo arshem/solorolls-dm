@@ -31,6 +31,7 @@ function onModelChange(pfx) {
 }
 
 function applyCfg(cfg, pfx = '') {
+  document.getElementById(pfx + 'name').value = cfg.name || ''
   document.getElementById(pfx + 'personality').value = cfg.personality || ''
   const model = VOICES[cfg.ttsModel] ? cfg.ttsModel : 'aura-2-en'
   document.getElementById(pfx + 'ttsModel').value = model
@@ -41,6 +42,7 @@ function applyCfg(cfg, pfx = '') {
 
 function readCfg(pfx = '') {
   return {
+    name: document.getElementById(pfx + 'name').value.trim(),
     personality: document.getElementById(pfx + 'personality').value.trim(),
     ttsModel: document.getElementById(pfx + 'ttsModel').value,
     ttsVoice: document.getElementById(pfx + 'ttsVoice').value
@@ -178,7 +180,6 @@ async function toggleEdit(k) {
     </div>
   `
   applyCfg(cfg, pfx)
-  document.getElementById(pfx + 'name').value = cfg.name || ''
 }
 
 async function saveUser(k, pfx) {

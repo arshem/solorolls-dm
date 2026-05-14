@@ -4,3 +4,4 @@ node_modules
 .env
 test/out.mp3
 .pio
+users.json
