@@ -264,6 +264,20 @@ static void faceTask(void *) {
       drawFaceBase();
     }
 
+    // Show/hide status text on state change
+    static FaceState lastDrawnState = FACE_IDLE;
+    if (state != lastDrawnState) {
+      // Clear status area
+      gfx->fillRect(0, 120, 128, 8, RGB565_BLACK);
+      if (state == FACE_LISTEN) {
+        gfx->setTextSize(1);
+        gfx->setTextColor(RGB565_GREEN);
+        gfx->setCursor(36, 120);
+        gfx->print("Listening");
+      }
+      lastDrawnState = state;
+    }
+
     // Blink logic (random blinks every 2-5 seconds)
     if (state != FACE_SLEEP && state != FACE_LISTEN) {
       if (!blinking && now - g_lastBlink > 2000 + (esp_random() % 3000)) {

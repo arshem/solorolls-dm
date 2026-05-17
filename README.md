@@ -1,5 +1,7 @@
 # SoloRolls DM
 
+## A huge shout out to @konsumer from https://github.com/konsumer/ailite-cf who gave me the basis of this! 
+
 Solo D&D Dungeon Master powered by Google Gemini Live API, running on an [AiPi Lite](https://aipi.com/products/aipi-lite) (ESP32-S3) device with a local Python server.
 
 Tap the button and start your adventure — the DM narrates in real-time. Gemini handles speech recognition, storytelling, and voice synthesis natively (no separate STT/LLM/TTS pipeline).
