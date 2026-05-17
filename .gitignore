@@ -6,3 +6,6 @@ test/out.mp3
 .pio
 users.json
 __pycache__
+.vscode
+local/sessions/*
+local/.venv

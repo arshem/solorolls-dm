@@ -1,79 +1,152 @@
-# ailite-cf
+# SoloRolls DM
 
-Cloudflare Worker + ESP32 firmware for an AI voice assistant on the [AI-Lite](https://www.elecrow.com/ai-lite-esp32-s3-ai-development-board.html) device.
+Solo D&D Dungeon Master powered by Google Gemini Live API, running on an [AiPi Lite](https://aipi.com/products/aipi-lite) (ESP32-S3) device with a local Python server.
 
-Hold the button, speak, get a spoken response. All AI runs on Cloudflare — no external API keys needed.
+Tap the button and start your adventure — the DM narrates in real-time. Gemini handles speech recognition, storytelling, and voice synthesis natively (no separate STT/LLM/TTS pipeline).
 
-https://github.com/user-attachments/assets/4efa78af-b0c0-42c3-a23f-0ffadb4cd5f6
+## Architecture
 
-## Device buttons
+```
+ESP32 (AiPi Lite) ←── WebSocket (16kHz PCM in, 24kHz PCM out) ──→ Python Server ←──→ Gemini Live API
+                                                                       ↕
+                                                                  Web UI (browser)
+```
+
+- **ESP32 firmware** — streams mic audio continuously; Gemini's built-in VAD detects when you're speaking
+- **Python server** — relays audio between the device and Gemini Live, manages sessions and users
+- **Web UI** — browser-based voice chat, settings, and admin panel (works independently of the device)
+
+## Game System
+
+Uses the **Rollless Roleplay** system — no dice, no hit points. Players spend Success Points to overcome challenges, earn them through good roleplay and creative problem-solving. Combat is narrative-based. The DM collaborates with you on world-building.
+
+## Device Buttons
 
 | Button | Action |
 |--------|--------|
-| A (left) | Hold to record voice; releases to send |
-| B (right) | Hold anytime to open config portal |
+| A (left) | Press to start session; device streams mic continuously after |
+| B (right) | Hold at boot to open config portal; hold 1s during session for portal |
+| Hold A + tap B | Open settings menu (during a session) |
 
-After the response finishes playing, the device sleeps automatically. Hold A to wake and start a new turn.
+After idle timeout (default 2 min, configurable), the device deep-sleeps. Press A to wake.
 
-## First-time setup
+## Settings Menu
 
-**Flash the firmware** — open `https://YOUR_WORKER.workers.dev/flash` in Chrome or Edge, plug in, click Flash.
+Hold A + tap B during a session to open the on-device settings menu. Navigate with B (scroll), A (select), and hold A+B (back/exit). All settings persist to flash on menu exit.
 
-**Configure the device** — on first boot (or hold B anytime), the device creates a WiFi AP called **AI-Lite-Setup**. Connect to it, fill in:
-- Your home WiFi network + password
-- Worker URL (`https://YOUR_WORKER.workers.dev`)
-- Your API key (from the web UI)
+| Menu Item | Description |
+|-----------|-------------|
+| Volume | Speaker volume: 20%, 40%, 60%, 80%, 100% (default 80%) |
+| Mic Gain | Microphone sensitivity: 20%, 40%, 60%, 80%, 100% (default 80%) |
+| Sleep Timer | Idle timeout before deep-sleep: 2 min, 5 min, 10 min, Never (default 2 min) |
+| Display | LCD brightness: ~10%, 25%, 50%, 75%, 100% (default 100%) |
+| WiFi | View saved networks, switch active, or add new (opens captive portal) |
+| About | Firmware version, WiFi SSID, RSSI, IP, WebSocket status, battery voltage |
 
-The device restarts and sleeps. Hold A to wake it.
+## Quick Start
 
-## Worker setup
-
-You need a [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier works).
+### Server (Docker)
 
 ```bash
-npm install
-
-# Create KV namespace for user storage
-npx wrangler kv namespace create CONFIG
-# Paste the printed ID into wrangler.toml → id = "..."
-
-# Set your admin secret
-npm run admin_key
-npx wrangler secret put API_SECRET
-
-npm run deploy
+cp .env.example .env
+# Edit .env and set GOOGLE_API_KEY
+docker-compose up -d
 ```
 
-Open `https://YOUR_WORKER.workers.dev/` — log in with your `API_SECRET` to create user keys, or with a user key to chat and configure your voice.
+The server runs on host port 8765 (mapped to 8787 inside the container).
 
-## Build firmware from source
+### Server (Local)
 
-Requires [PlatformIO](https://platformio.org/).
+```bash
+cd local
+pip install -r requirements.txt
+export GOOGLE_API_KEY=your-key-here
+python server.py
+```
+
+### First-time Device Setup
+
+1. Flash the firmware (see [Firmware](#firmware) below)
+2. Hold B on boot — the device creates a WiFi AP called **SoloRolls-DM**
+3. Connect to it and fill in:
+   - Your WiFi network + password
+   - Server URL (e.g. `https://yourdomain.com` or `http://192.168.1.x:8765`)
+   - API key (create one from the web UI admin panel)
+4. Device restarts and sleeps. Press A to wake and begin your adventure.
+
+## Firmware
+
+Targets ESP32-S3 (AiPi Lite) with ES8311 codec, ST7735 128x128 LCD, 8MB PSRAM.
+
+### Compile
 
 ```bash
 cd firmware
-pio run --target upload
-pio device monitor
+pio run
 ```
 
-To reset all saved settings:
+This produces `firmware/.pio/build/ailite/firmware.factory.bin`.
+
+### Flash
 
 ```bash
-pio run --target erase
+esptool --chip esp32s3 write_flash 0x0 firmware/.pio/build/ailite/firmware.factory.bin
 ```
 
-## AI models
+### Erase all saved settings (NVS)
 
-All run on Cloudflare — no third-party accounts needed.
+```bash
+esptool --chip esp32s3 erase_flash
+```
 
-| Step | Model |
-|------|-------|
-| Speech → Text | `@cf/openai/whisper-large-v3-turbo` |
-| Text → Response | `@cf/meta/llama-3.1-8b-instruct` |
-| Response → Speech | `@cf/deepgram/aura-2-en` or `aura-2-es` |
+## Web UI
 
-Cloudflare's free tier (10,000 neurons/day) covers hundreds of turns per day.
+Open your server URL in a browser. Log in with your API key to:
+- Voice chat with the DM (tap mic to talk)
+- View real-time transcriptions of both player and DM speech
+- Download game transcripts
+- Start a new game (resets conversation history)
+- Configure DM personality and voice (Settings)
+- Manage users (admin only)
 
-## API / WebSocket docs
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOOGLE_API_KEY` | — | Google AI API key (required) |
+| `API_SECRET` | random | Admin key for user management |
+| `PORT` | `8765` | Server port |
+| `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model |
+
+### Per-User Config (via `/config` endpoint or Settings UI)
+
+| Field | Description |
+|-------|-------------|
+| `name` | Assistant/DM display name |
+| `personality` | System prompt for the DM |
+| `voice` | Gemini voice name (`Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, etc.) |
+
+## API
 
 See [API.md](API.md) for endpoint reference and WebSocket protocol details.
+
+## Further Documentation
+
+See the [docs/](docs/) folder for detailed guides:
+- [Firmware Guide](docs/firmware.md) — hardware details, boot flow, audio pipeline, face animation
+- [Server Guide](docs/server.md) — session management, Gemini integration, deployment
+- [Web UI Guide](docs/webui.md) — browser audio, WebSocket handling, features
+
+## Deploy
+
+```bash
+docker-compose up -d
+```
+
+Or run directly:
+
+```bash
+python local/server.py
+```

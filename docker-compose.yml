@@ -1,0 +1,14 @@
+services:
+  aidm:
+    build: .
+    container_name: solorolls-dm
+    restart: unless-stopped
+    ports:
+      - "8765:8787"
+    env_file:
+      - .env
+    environment:
+      - PORT=8787
+    volumes:
+      - ./local/users.json:/app/local/users.json
+      - ./local/sessions:/app/local/sessions

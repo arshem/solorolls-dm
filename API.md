@@ -1,68 +1,71 @@
 # API Reference
 
-All requests authenticated via `Authorization: Bearer <key>`. Admin endpoints require the primary `API_SECRET`; all others accept any valid user key.
+All HTTP requests authenticated via `Authorization: Bearer <key>`. Admin endpoints require the `API_SECRET`; all others accept any valid user key. WebSocket auth uses the `?key=` query parameter.
 
 ## Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/` | none | Web UI |
+| `GET` | `/` | none | Web UI (static files) |
 | `GET` | `/whoami` | user | `{"name":"...","isAdmin":bool}` |
 | `GET` | `/config` | user | Get user config |
-| `POST` | `/config` | user | Update user config |
-| `POST` | `/chat` | user | Voice or text chat (see below) |
-| `GET` | `/ws?key=<key>` | query param | WebSocket voice pipeline |
+| `POST` | `/config` | user | Update user config (blocked for admin) |
+| `GET` | `/history` | user | Get conversation history |
+| `POST` | `/reset` | user | Clear history, force-close active session |
 | `GET` | `/admin/keys` | admin | List all users |
-| `POST` | `/admin/keys` | admin | Create user → `{"key":"..."}` |
-| `PUT` | `/admin/keys/:key` | admin | Update user config |
+| `POST` | `/admin/keys` | admin | Create user → `{"key":"...","name":"..."}` |
 | `DELETE` | `/admin/keys/:key` | admin | Delete user |
+| `WS` | `/ws?key=<key>` | query param | WebSocket audio relay to Gemini Live |
 
-## `/chat` modes
+## User Config Fields
 
-| Request body | Response |
-|---|---|
-| Raw WAV audio | MP3 stream |
-| Raw WAV + `Accept: application/json` | `{"input":"...","text":"...","audio":"<base64>"}` |
-| `{"text":"..."}` | `{"text":"...","audio":"<base64>"}` |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | `SoloRolls DM` | Display name for the assistant |
+| `personality` | string | Built-in DM persona | System prompt sent to Gemini |
+| `voice` | string | `Charon` | Gemini voice name |
 
-## User config fields
+Available voices include: `Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, and others supported by Gemini Live.
 
-| Field | Values | Default |
-|-------|--------|---------|
-| `name` | string | — |
-| `personality` | string (system prompt) | — |
-| `ttsModel` | `aura-2-en`, `aura-2-es` | `aura-2-en` |
-| `ttsVoice` | voice name for chosen model | `luna` |
+## WebSocket Protocol (`/ws`)
 
-## Voice models
+Connect: `wss://YOUR_SERVER/ws?key=YOUR_KEY` (or `ws://` for local HTTP)
 
-| `ttsModel` | Language | Voices | Default voice |
-|------------|----------|--------|---------------|
-| `aura-2-en` | English | 39 | `luna` |
-| `aura-2-es` | Spanish | 10 | `aquila` |
+The connection stays open for the duration of the session. Audio flows bidirectionally in real-time — Gemini's built-in VAD handles turn-taking.
 
-Full voice lists are in `worker/public/index.js` → `VOICES`.
-
-## WebSocket protocol (`/ws`)
-
-Connect: `wss://YOUR_WORKER.workers.dev/ws?key=YOUR_KEY`
-
-The connection stays open for multi-turn conversation.
-
-**Device → Worker**
+### Device/Browser → Server
 
 | Frame | Meaning |
 |-------|---------|
-| Binary | Raw audio chunk (streamed while recording) |
-| `{"type":"done"}` | Button released — triggers STT → LLM → TTS |
+| Binary | Raw 16kHz mono PCM audio chunks (continuous mic stream) |
+| `{"type":"end_audio"}` | Mic stopped (browser only — signals end of audio input) |
+| `{"type":"ping"}` | Keepalive |
 
-**Worker → Device** (in order per turn)
+### Server → Device/Browser
 
 | Frame | Meaning |
 |-------|---------|
-| `{"type":"transcript","text":"..."}` | What Whisper heard |
-| `{"type":"response","text":"..."}` | LLM reply text |
-| `{"type":"audio_start"}` | TTS stream starting |
-| Binary | MP3 frames (feed directly to decoder) |
-| `{"type":"audio_end"}` | Turn complete |
-| `{"type":"error","message":"..."}` | Pipeline error |
+| Binary | Raw 24kHz mono PCM audio chunks (Gemini's voice response) |
+| `{"type":"transcript","text":"..."}` | Player's speech transcribed by Gemini |
+| `{"type":"response","text":"..."}` | DM's response text (output transcription) |
+| `{"type":"interrupted"}` | Gemini was interrupted (player started talking) |
+| `{"type":"reconnecting","message":"..."}` | Server-side session rotation |
+| `{"type":"pong"}` | Keepalive response |
+| `{"type":"error","message":"..."}` | Error |
+
+### Connection Lifecycle
+
+1. Client connects with API key in query param
+2. Server opens a Gemini Live session with the user's personality/voice config
+3. If conversation history exists, it's injected into the system prompt for continuity
+4. Audio flows bidirectionally — no explicit "done" signal needed (Gemini VAD)
+5. Transcriptions stream as text frames alongside audio
+6. Session persists on disk; reconnecting resumes the campaign
+7. `POST /reset` force-closes the WebSocket (code 4002) and clears history
+
+### Close Codes
+
+| Code | Meaning |
+|------|---------|
+| 4001 | Invalid API key |
+| 4002 | Session reset by user (new game) |

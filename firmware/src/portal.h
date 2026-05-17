@@ -5,7 +5,7 @@ const char PORTAL_HTML[] PROGMEM = R"=====(<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI-Lite Setup</title>
+  <title>SoloRolls DM Setup</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
@@ -51,31 +51,63 @@ const char PORTAL_HTML[] PROGMEM = R"=====(<!DOCTYPE html>
       font-size: 1rem;
       font-weight: bold;
       cursor: pointer;
+      margin-top: .5rem;
     }
     button:hover { background: #38bdf8; }
+    .btn-danger { background: #dc2626; }
+    .btn-danger:hover { background: #ef4444; }
+    .btn-secondary { background: #374151; }
+    .btn-secondary:hover { background: #4b5563; }
     #ssid_custom { margin-top: .5rem; }
+    .saved-net {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .5rem .75rem;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 6px;
+      margin-bottom: .5rem;
+    }
+    .saved-net .name { font-size: .95rem; }
+    .saved-net .active { color: #4ade80; font-size: .8rem; margin-left: .5rem; }
+    .saved-net button {
+      width: auto;
+      padding: .3rem .6rem;
+      font-size: .8rem;
+      margin: 0;
+    }
+    .empty-msg { color: #666; font-style: italic; font-size: .9rem; }
   </style>
 </head>
 <body>
-  <h1>AI-Lite Setup</h1>
+  <h1>SoloRolls DM Setup</h1>
+
+  <fieldset>
+    <legend>Saved Networks</legend>
+    <div id="saved_nets">{{SAVED_NETS}}</div>
+  </fieldset>
+
   <form onsubmit="save(event)">
     <fieldset>
-      <legend>WiFi</legend>
+      <legend>Add WiFi Network</legend>
       <label>Network
         <select id="ssid_sel" onchange="selChange()">
           <option value="">Custom...</option>
           {{WIFI_OPTIONS}}
         </select>
-        <input id="ssid_custom" type="text" placeholder="Enter SSID" value="{{SSID}}" />
+        <input id="ssid_custom" type="text" placeholder="Enter SSID" value="" />
       </label>
       <label>Password
-        <input id="password" type="password" value="{{PASS}}" autocomplete="current-password" />
+        <input id="password" type="password" value="" autocomplete="current-password" />
       </label>
+      <button type="submit">Add Network</button>
     </fieldset>
+
     <fieldset>
-      <legend>Worker</legend>
-      <label>Worker URL
-        <input id="workerUrl" type="url" value="{{WORKER_URL}}" placeholder="https://your-worker.workers.dev" />
+      <legend>Server</legend>
+      <label>Server URL
+        <input id="workerUrl" type="url" value="{{WORKER_URL}}" placeholder="https://<yourdomain>" />
       </label>
       <label>API Key
         <input id="apiKey" type="text" value="{{API_KEY}}" placeholder="your-api-key" autocomplete="off" />
@@ -83,30 +115,46 @@ const char PORTAL_HTML[] PROGMEM = R"=====(<!DOCTYPE html>
     </fieldset>
     <button type="submit">Save &amp; Restart</button>
   </form>
+
   <script>
     function selChange() {
       const v = document.getElementById('ssid_sel').value;
-      document.getElementById('ssid_custom').style.display = v ? 'none' : 'block';
+      const custom = document.getElementById('ssid_custom');
+      custom.style.display = v ? 'none' : 'block';
+      if (v) custom.value = '';
     }
     selChange();
 
     async function save(e) {
       e.preventDefault();
       const sel = document.getElementById('ssid_sel').value;
+      const ssid = sel || document.getElementById('ssid_custom').value;
+      if (!ssid) { alert('Please select or enter a WiFi network'); return; }
       const body = JSON.stringify({
-        ssid:      sel || document.getElementById('ssid_custom').value,
+        ssid:      ssid,
         password:  document.getElementById('password').value,
         workerUrl: document.getElementById('workerUrl').value,
         apiKey:    document.getElementById('apiKey').value
       });
       try {
-        await fetch('/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body });
-        alert('Saved! Restarting...');
+        const r = await fetch('/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body });
+        if (r.ok) alert('Saved! Restarting...');
+        else alert('Error: ' + await r.text());
       } catch (err) {
         alert('Save failed: ' + err);
       }
     }
+
+    async function removeNet(idx) {
+      if (!confirm('Remove this network?')) return;
+      try {
+        const r = await fetch('/remove', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({index: idx}) });
+        if (r.ok) location.reload();
+        else alert('Error: ' + await r.text());
+      } catch (err) {
+        alert('Remove failed: ' + err);
+      }
+    }
   </script>
 </body>
-</html>
-)=====";
+</html>)=====";
