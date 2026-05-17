@@ -28,13 +28,13 @@ pio run
 Flash the resulting binary with esptool:
 
 ```bash
-esptool --chip esp32s3 write_flash 0x0 firmware/.pio/build/ailite/firmware.factory.bin
+esptool --chip esp32s3 write-flash 0x0 firmware/.pio/build/ailite/firmware.factory.bin
 ```
 
 Erase all saved settings:
 
 ```bash
-esptool --chip esp32s3 erase_flash
+esptool --chip esp32s3 erase-flash
 ```
 
 ## Dependencies

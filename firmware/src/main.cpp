@@ -121,377 +121,11 @@ I2SCodecStream i2s(board);
 
 // ── WebSocket + audio state (declared early for menu access) ──────────────────
 
-static volatile bool      g_wsConnected = false;
-static volatile bool      g_playing     = false;
+static volatile bool      g_wsConnected  = false;
+static volatile bool      g_playing      = false;
+static volatile bool      g_playTaskRun  = false;
 
-// ── Settings Menu System ──────────────────────────────────────────────────────
-// Hold A + tap B → open menu
-// Tap B → scroll, Tap A → select
-// Hold A+B → back out
-
-enum MenuItem { MENU_VOLUME, MENU_MIC, MENU_SLEEP, MENU_DISPLAY, MENU_WIFI, MENU_ABOUT, MENU_COUNT };
-static const char *MENU_LABELS[] = {"Volume", "Mic Gain", "Sleep Timer", "Display", "WiFi", "About"};
-
-static volatile bool g_inMenu = false;
-
-// Helper: wait for both buttons released
-void waitBothReleased() {
-  while (digitalRead(PIN_BTN_A) == LOW || digitalRead(PIN_BTN_B) == LOW) delay(10);
-  delay(50);
-}
-
-// Helper: wait for a single button released
-void waitBtnRelease(int pin) {
-  while (digitalRead(pin) == LOW) delay(10);
-  delay(50);
-}
-
-// Check if both buttons held (for back/exit)
-bool bothHeld() {
-  return (digitalRead(PIN_BTN_A) == LOW && digitalRead(PIN_BTN_B) == LOW);
-}
-
-// Draw the main menu
-void drawMenu(int cursor) {
-  gfx->fillRect(0, 0, 128, 128, RGB565_BLACK);
-  gfx->setTextSize(1);
-  gfx->setTextColor(RGB565_WHITE);
-  gfx->setCursor(4, 2);
-  gfx->print("= Settings =");
-  gfx->drawFastHLine(0, 12, 128, RGB565_WHITE);
-
-  for (int i = 0; i < MENU_COUNT; i++) {
-    int y = 16 + i * 16;
-    if (i == cursor) {
-      gfx->fillRect(0, y, 128, 14, gfx->color565(40, 40, 80));
-      gfx->setTextColor(RGB565_GREEN);
-    } else {
-      gfx->setTextColor(RGB565_WHITE);
-    }
-    gfx->setCursor(8, y + 3);
-    gfx->print(MENU_LABELS[i]);
-  }
-
-  gfx->setTextColor(gfx->color565(128, 128, 128));
-  gfx->setCursor(4, 118);
-  gfx->print("A:sel B:next A+B:back");
-}
-
-// Draw a slider-style submenu
-void drawSlider(const char *title, int value, int maxVal, const char *label) {
-  gfx->fillRect(0, 0, 128, 128, RGB565_BLACK);
-  gfx->setTextSize(1);
-  gfx->setTextColor(RGB565_WHITE);
-  gfx->setCursor(4, 4);
-  gfx->print(title);
-  gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
-
-  // Bar
-  gfx->drawRect(8, 50, 112, 16, RGB565_WHITE);
-  int barW = (int)(108.0f * value / maxVal);
-  gfx->fillRect(10, 52, barW, 12, RGB565_GREEN);
-
-  // Label
-  gfx->setCursor(40, 75);
-  gfx->setTextColor(RGB565_WHITE);
-  gfx->print(label);
-
-  gfx->setTextColor(gfx->color565(128, 128, 128));
-  gfx->setCursor(4, 118);
-  gfx->print("B:change  A+B:back");
-}
-
-// ── Submenu: Volume ───────────────────────────────────────────────────────────
-void menuVolume() {
-  while (true) {
-    char lbl[16];
-    snprintf(lbl, sizeof(lbl), "%d%%", (int)(VOL_LEVELS[g_volIndex] * 100));
-    drawSlider("Volume", g_volIndex, VOL_COUNT - 1, lbl);
-
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      if (digitalRead(PIN_BTN_B) == LOW) {
-        delay(50);
-        if (!bothHeld()) {
-          g_volIndex = (g_volIndex + 1) % VOL_COUNT;
-          if (g_playing) i2s.setVolume(VOL_LEVELS[g_volIndex]);
-          waitBtnRelease(PIN_BTN_B);
-          break; // redraw
-        }
-      }
-      delay(20);
-    }
-  }
-}
-
-// ── Submenu: Mic Sensitivity ──────────────────────────────────────────────────
-void menuMic() {
-  while (true) {
-    char lbl[16];
-    snprintf(lbl, sizeof(lbl), "%d%%", (int)(MIC_LEVELS[g_micIndex] * 100));
-    drawSlider("Mic Gain", g_micIndex, MIC_COUNT - 1, lbl);
-
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      if (digitalRead(PIN_BTN_B) == LOW) {
-        delay(50);
-        if (!bothHeld()) {
-          g_micIndex = (g_micIndex + 1) % MIC_COUNT;
-          waitBtnRelease(PIN_BTN_B);
-          break;
-        }
-      }
-      delay(20);
-    }
-  }
-}
-
-// ── Submenu: Sleep Timer ──────────────────────────────────────────────────────
-void menuSleep() {
-  while (true) {
-    gfx->fillRect(0, 0, 128, 128, RGB565_BLACK);
-    gfx->setTextSize(1);
-    gfx->setTextColor(RGB565_WHITE);
-    gfx->setCursor(4, 4);
-    gfx->print("Sleep Timer");
-    gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
-
-    for (int i = 0; i < SLEEP_COUNT; i++) {
-      int y = 24 + i * 18;
-      if (i == g_sleepIndex) {
-        gfx->fillRect(0, y, 128, 16, gfx->color565(40, 40, 80));
-        gfx->setTextColor(RGB565_GREEN);
-      } else {
-        gfx->setTextColor(RGB565_WHITE);
-      }
-      gfx->setCursor(12, y + 4);
-      gfx->print(SLEEP_LABELS[i]);
-    }
-
-    gfx->setTextColor(gfx->color565(128, 128, 128));
-    gfx->setCursor(4, 118);
-    gfx->print("B:change  A+B:back");
-
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      if (digitalRead(PIN_BTN_B) == LOW) {
-        delay(50);
-        if (!bothHeld()) {
-          g_sleepIndex = (g_sleepIndex + 1) % SLEEP_COUNT;
-          waitBtnRelease(PIN_BTN_B);
-          break;
-        }
-      }
-      delay(20);
-    }
-  }
-}
-
-// ── Submenu: Display Brightness ───────────────────────────────────────────────
-void menuDisplay() {
-  while (true) {
-    int pct = (BRIGHT_LEVELS[g_brightIndex] * 100) / 255;
-    char lbl[16];
-    snprintf(lbl, sizeof(lbl), "%d%%", pct);
-    drawSlider("Brightness", g_brightIndex, BRIGHT_COUNT - 1, lbl);
-
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      if (digitalRead(PIN_BTN_B) == LOW) {
-        delay(50);
-        if (!bothHeld()) {
-          g_brightIndex = (g_brightIndex + 1) % BRIGHT_COUNT;
-          analogWrite(PIN_LCD_BL, BRIGHT_LEVELS[g_brightIndex]);
-          waitBtnRelease(PIN_BTN_B);
-          break;
-        }
-      }
-      delay(20);
-    }
-  }
-}
-
-// ── Submenu: WiFi ─────────────────────────────────────────────────────────────
-void menuWifi() {
-  int cursor = 0;
-  while (true) {
-    gfx->fillRect(0, 0, 128, 128, RGB565_BLACK);
-    gfx->setTextSize(1);
-    gfx->setTextColor(RGB565_WHITE);
-    gfx->setCursor(4, 4);
-    gfx->print("WiFi Networks");
-    gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
-
-    int totalItems = g_wifiCount + 1; // networks + "Add new..."
-    for (int i = 0; i < totalItems && i < MAX_WIFI_NETS + 1; i++) {
-      int y = 18 + i * 16;
-      if (i == cursor) {
-        gfx->fillRect(0, y, 128, 14, gfx->color565(40, 40, 80));
-        gfx->setTextColor(RGB565_GREEN);
-      } else {
-        gfx->setTextColor(RGB565_WHITE);
-      }
-      gfx->setCursor(8, y + 3);
-      if (i < g_wifiCount) {
-        gfx->print(g_wifiNets[i].ssid);
-        if (i == g_wifiActive) gfx->print(" *");
-      } else {
-        gfx->print("+ Add new...");
-      }
-    }
-
-    gfx->setTextColor(gfx->color565(128, 128, 128));
-    gfx->setCursor(4, 118);
-    gfx->print("A:sel B:next A+B:back");
-
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      if (digitalRead(PIN_BTN_B) == LOW) {
-        delay(50);
-        if (!bothHeld()) {
-          cursor = (cursor + 1) % totalItems;
-          waitBtnRelease(PIN_BTN_B);
-          break;
-        }
-      }
-      if (digitalRead(PIN_BTN_A) == LOW) {
-        delay(50);
-        if (!bothHeld() && digitalRead(PIN_BTN_A) == LOW) {
-          waitBtnRelease(PIN_BTN_A);
-          if (cursor < g_wifiCount) {
-            // Switch to this network — will reconnect on menu exit
-            g_wifiActive = cursor;
-            // Show confirmation
-            gfx->fillRect(0, 20, 128, 90, RGB565_BLACK);
-            gfx->setTextColor(RGB565_GREEN);
-            gfx->setCursor(8, 50);
-            gfx->print("Selected:");
-            gfx->setCursor(8, 65);
-            gfx->print(g_wifiNets[cursor].ssid);
-            delay(1000);
-          } else {
-            // "Add new" — open config portal
-            waitBothReleased();
-            return; // caller will handle portal launch
-          }
-          break;
-        }
-      }
-      delay(20);
-    }
-  }
-}
-
-// ── Submenu: About ────────────────────────────────────────────────────────────
-void menuAbout() {
-  while (true) {
-    gfx->fillRect(0, 0, 128, 128, RGB565_BLACK);
-    gfx->setTextSize(1);
-    gfx->setTextColor(RGB565_WHITE);
-    gfx->setCursor(4, 4);
-    gfx->print("About");
-    gfx->drawFastHLine(0, 14, 128, RGB565_WHITE);
-
-    int y = 20;
-    gfx->setCursor(4, y); gfx->print("FW: "); gfx->print(FW_VERSION);
-    y += 14;
-    gfx->setCursor(4, y); gfx->print("WiFi: ");
-    if (g_wifiActive >= 0 && g_wifiActive < g_wifiCount) {
-      gfx->print(g_wifiNets[g_wifiActive].ssid);
-    } else {
-      gfx->print("--");
-    }
-    y += 14;
-    gfx->setCursor(4, y); gfx->print("RSSI: ");
-    gfx->print(WiFi.RSSI()); gfx->print(" dBm");
-    y += 14;
-    gfx->setCursor(4, y); gfx->print("IP: ");
-    gfx->print(WiFi.localIP().toString());
-    y += 14;
-    gfx->setCursor(4, y); gfx->print("WS: ");
-    gfx->print(g_wsConnected ? "Connected" : "Disconnected");
-    y += 14;
-    // Battery voltage (rough estimate from ADC)
-    int rawAdc = analogRead(PIN_BAT_ADC);
-    float voltage = rawAdc * 3.3f * 2.0f / 4095.0f; // assuming voltage divider
-    gfx->setCursor(4, y); gfx->print("Bat: ");
-    char vbuf[8]; snprintf(vbuf, sizeof(vbuf), "%.1fV", voltage);
-    gfx->print(vbuf);
-
-    gfx->setTextColor(gfx->color565(128, 128, 128));
-    gfx->setCursor(4, 118);
-    gfx->print("A+B: back");
-
-    // Wait for exit
-    while (true) {
-      if (bothHeld()) { waitBothReleased(); return; }
-      delay(20);
-    }
-  }
-}
-
-// ── Main menu handler ─────────────────────────────────────────────────────────
-// Returns true if WiFi portal should be opened after menu exits
-bool openSettingsMenu() {
-  g_inMenu = true;
-  int cursor = 0;
-  bool needPortal = false;
-
-  drawMenu(cursor);
-
-  while (true) {
-    // Exit: hold both
-    if (bothHeld()) {
-      waitBothReleased();
-      break;
-    }
-
-    // B tap: move cursor
-    if (digitalRead(PIN_BTN_B) == LOW) {
-      delay(50);
-      if (!bothHeld()) {
-        cursor = (cursor + 1) % MENU_COUNT;
-        drawMenu(cursor);
-        waitBtnRelease(PIN_BTN_B);
-      }
-    }
-
-    // A tap: select item
-    if (digitalRead(PIN_BTN_A) == LOW) {
-      delay(50);
-      if (!bothHeld() && digitalRead(PIN_BTN_A) == LOW) {
-        waitBtnRelease(PIN_BTN_A);
-        switch ((MenuItem)cursor) {
-          case MENU_VOLUME:  menuVolume();  break;
-          case MENU_MIC:     menuMic();     break;
-          case MENU_SLEEP:   menuSleep();   break;
-          case MENU_DISPLAY: menuDisplay(); break;
-          case MENU_WIFI:    menuWifi();    break;
-          case MENU_ABOUT:   menuAbout();   break;
-          default: break;
-        }
-        drawMenu(cursor); // redraw main menu after submenu exit
-      }
-    }
-
-    delay(20);
-  }
-
-  // Save settings to NVS
-  {
-    Preferences prefs;
-    prefs.begin("ailite", false);
-    prefs.putInt("volIndex", g_volIndex);
-    prefs.putInt("micIndex", g_micIndex);
-    prefs.putInt("sleepIdx", g_sleepIndex);
-    prefs.putInt("brightIdx", g_brightIndex);
-    prefs.putInt("wifiActive", g_wifiActive);
-    prefs.end();
-  }
-
-  g_inMenu = false;
-  return needPortal;
-}
+#include "menu.h"
 
 // ── Animated Face ─────────────────────────────────────────────────────────────
 // Simple wizard/DM face that animates based on device state.
@@ -602,6 +236,7 @@ static void faceTask(void *) {
 
   unsigned long lastFrame = 0;
   bool blinking = false;
+  bool wasPlaying = false;
 
   while (g_faceTaskRun) {
     unsigned long now = millis();
@@ -612,6 +247,22 @@ static void faceTask(void *) {
     lastFrame = now;
 
     FaceState state = g_faceState;
+
+    // Skip display updates during playback — SPI writes interfere with I2S DMA
+    if (g_playTaskRun) {
+      wasPlaying = true;
+      // Still advance animation counters so it's smooth when we resume drawing
+      if (state == FACE_SPEAK) g_mouthFrame++;
+      if (state == FACE_THINK) g_thinkFrame = (g_thinkFrame + 1) % 9;
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+
+    // Redraw base after playback ends
+    if (wasPlaying) {
+      wasPlaying = false;
+      drawFaceBase();
+    }
 
     // Blink logic (random blinks every 2-5 seconds)
     if (state != FACE_SLEEP && state != FACE_LISTEN) {
@@ -903,7 +554,6 @@ static uint8_t  *g_ring         = nullptr;
 static volatile size_t g_ringHead    = 0;
 static volatile size_t g_ringTail    = 0;
 static volatile bool   g_ringReady   = false;
-static volatile bool   g_playTaskRun = false;
 static volatile bool   g_interrupted = false;
 
 static size_t ringAvailable() {
@@ -935,6 +585,9 @@ static size_t ringRead(uint8_t *dst, size_t maxLen) {
 static inline void hwLock()   { xSemaphoreTake(g_mutex, portMAX_DELAY); }
 static inline void hwUnlock() { xSemaphoreGive(g_mutex); }
 
+// Mic pause flag — play task sets this to claim the I2S bus
+static volatile bool g_micPaused  = false;
+
 // ── Playback task: drains ring buffer to I2S (Core 1) ─────────────────────────
 // Gemini sends 24kHz mono PCM. We upsample to 48kHz stereo for the ES8311.
 // 24kHz→48kHz = 2x (duplicate each sample), mono→stereo = 2x. Total: 4x expansion.
@@ -943,6 +596,10 @@ static void playTask(void *) {
   uint8_t playChunk[256];     // mono 24kHz PCM from ring buffer (128 samples)
   int16_t stereoOut[512];     // 48kHz stereo output (128 input → 256 output frames × 2ch)
   unsigned long lastDataTime = 0;
+
+  // Pause mic — we share the I2S bus
+  g_micPaused = true;
+  vTaskDelay(pdMS_TO_TICKS(120)); // let mic task release I2S
 
   // Wait for prebuffer
   while (g_playTaskRun && !g_ringReady) {
@@ -978,8 +635,8 @@ static void playTask(void *) {
       // Write: monoSamples * 4 samples * 2 bytes = monoSamples * 8 bytes
       i2s.write((uint8_t *)stereoOut, monoSamples * 8);
     } else {
-      // Buffer empty — wait for more data, but don't exit
-      if (millis() - lastDataTime > 5000) break;
+      // Buffer empty — wait briefly for more data, then exit
+      if (millis() - lastDataTime > 500) break;
       vTaskDelay(pdMS_TO_TICKS(5));
     }
   }
@@ -990,7 +647,9 @@ static void playTask(void *) {
     digitalWrite(PIN_SPKR_EN, LOW);
     g_playing = false;
   }
-  setFaceState(FACE_LISTEN);  // mic is still streaming, ready for next input
+  // Unpause mic — it will reinitialize I2S in RX mode
+  g_micPaused = false;
+  setFaceState(FACE_LISTEN);
   g_playTaskRun = false;
   vTaskDelete(nullptr);
 }
@@ -1146,6 +805,17 @@ static void micTask(void *) {
   setFaceState(FACE_LISTEN);
 
   while (g_micTaskRun) {
+    // Pause mic during playback — release I2S bus
+    if (g_micPaused) {
+      i2s.end();
+      while (g_micPaused && g_micTaskRun) vTaskDelay(pdMS_TO_TICKS(50));
+      if (!g_micTaskRun) break;
+      accumLen = 0;
+      codecBeginRec();
+      setFaceState(FACE_LISTEN);
+      continue;
+    }
+
     if (!g_wsConnected) {
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
@@ -1240,6 +910,7 @@ void setup() {
   WiFi.setSleep(false);
 
   bool wifiOk = false;
+  wl_status_t lastStatus = WL_IDLE_STATUS;
   // Try active network first with cached IP
   if (g_wifiActive >= 0 && g_wifiActive < g_wifiCount) {
     if (cachedIp) {
@@ -1250,16 +921,20 @@ void setup() {
     WiFi.begin(g_wifiNets[g_wifiActive].ssid, g_wifiNets[g_wifiActive].pass);
     unsigned long t = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t < 8000) delay(100);
-    if (WiFi.status() == WL_CONNECTED) wifiOk = true;
+    lastStatus = (wl_status_t)WiFi.status();
+    if (lastStatus == WL_CONNECTED) wifiOk = true;
   }
   // Try remaining networks (including active again with clean DHCP)
   if (!wifiOk) {
-    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE); // clear any stale config
     for (int i = 0; i < g_wifiCount && !wifiOk; i++) {
+      WiFi.disconnect(true);
+      delay(100);
+      WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE); // clean DHCP
       WiFi.begin(g_wifiNets[i].ssid, g_wifiNets[i].pass);
       unsigned long t = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - t < 8000) delay(100);
-      if (WiFi.status() == WL_CONNECTED) {
+      while (WiFi.status() != WL_CONNECTED && millis() - t < 10000) delay(100);
+      lastStatus = (wl_status_t)WiFi.status();
+      if (lastStatus == WL_CONNECTED) {
         g_wifiActive = i;
         wifiOk = true;
       }
@@ -1267,8 +942,30 @@ void setup() {
   }
 
   if (!wifiOk) {
-    showMsg("WiFi", "failed", RGB565_RED);
-    delay(2000);
+    const char *reason = "unknown";
+    switch (lastStatus) {
+      case WL_NO_SSID_AVAIL:    reason = "SSID not found"; break;
+      case WL_CONNECT_FAILED:   reason = "connect failed"; break;
+      case WL_CONNECTION_LOST:  reason = "connection lost"; break;
+      case WL_DISCONNECTED:     reason = "disconnected"; break;
+      case WL_NO_SHIELD:        reason = "no WiFi hw"; break;
+      case WL_IDLE_STATUS:      reason = "no networks"; break;
+      default:                  reason = "timeout"; break;
+    }
+    showMsg("WiFi fail", reason, RGB565_RED);
+    // Wait up to 5s — press B to open config portal, otherwise sleep
+    unsigned long t = millis();
+    bool portalRequested = false;
+    while (millis() - t < 5000) {
+      if (digitalRead(PIN_BTN_B) == LOW) {
+        delay(50);
+        if (digitalRead(PIN_BTN_B) == LOW) { portalRequested = true; break; }
+      }
+      delay(50);
+    }
+    if (portalRequested) {
+      openPortal();
+    }
     goSleep();
     return;
   }
@@ -1297,17 +994,12 @@ void setup() {
     return;
   }
 
-  // Start face animation and continuous mic streaming
-  startFaceTask();
-  setFaceState(FACE_IDLE);
-
   // Wait for first button press to begin the session
   showMsg("Ready", "press A: begin", RGB565_GREEN);
   while (digitalRead(PIN_BTN_A) == HIGH) {
     if (digitalRead(PIN_BTN_B) == LOW) {
       delay(50);
       if (digitalRead(PIN_BTN_B) == LOW) {
-        stopFaceTask();
         disconnectWS();
         openPortal();
         goSleep();
@@ -1320,7 +1012,9 @@ void setup() {
   while (digitalRead(PIN_BTN_A) == LOW) delay(10);
   delay(50);
 
-  // Start continuous mic streaming — Gemini VAD handles turn-taking
+  // Start face animation and continuous mic streaming
+  startFaceTask();
+  setFaceState(FACE_LISTEN);
   startMicStream();
 
   // Apply brightness setting
@@ -1334,9 +1028,21 @@ void setup() {
       delay(50);
       if (digitalRead(PIN_BTN_A) == LOW && digitalRead(PIN_BTN_B) == LOW) {
         waitBothReleased();
-        // Pause mic during menu
+        // Pause mic and face during menu
         stopMicStream();
+        stopFaceTask();
         bool needPortal = openSettingsMenu();
+        // Handle new game reconnection
+        if (g_needReconnect) {
+          g_needReconnect = false;
+          disconnectWS();
+          showMsg("Connecting...");
+          if (!connectWS()) {
+            showMsg("WS fail", nullptr, RGB565_RED);
+            delay(2000);
+            break;
+          }
+        }
         // Restore display
         showHeader();
         startFaceTask();
