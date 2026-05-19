@@ -111,6 +111,16 @@ Open your server URL in a browser. Log in with your API key to:
 - Configure DM personality and voice (Settings)
 - Manage users (admin only)
 
+### Mobile Support
+
+The Web UI is designed to work as a mobile PWA (Add to Home Screen). When the mic is active:
+
+- **Wake Lock** keeps the screen from auto-locking, so you can play hands-free (e.g. phone mounted while driving)
+- **Silent audio keepalive** maintains the browser audio session in the background, preventing mobile browsers from suspending the page
+- **Seamless reconnection** — if the Gemini session cycles or briefly drops, the client reconnects silently without showing disconnect UI unless there's an actual connectivity problem
+
+> **Note:** If the user manually locks the screen, the browser will still suspend the page. The session reconnects automatically when the screen is unlocked. For fully background audio (screen off), a native app wrapper would be required.
+
 ## Configuration
 
 ### Environment Variables
@@ -121,14 +131,19 @@ Open your server URL in a browser. Log in with your API key to:
 | `API_SECRET` | random | Admin key for user management |
 | `PORT` | `8765` | Server port |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model |
+| `DM_PERSONALITY` | *(built-in Alistair W. prompt)* | Full system prompt for the DM persona, voice style, and game rules |
+| `DM_NEW_GAME_INTRO` | *(built-in)* | Instructions appended when starting a brand new campaign |
+| `DM_CONTINUATION` | *(built-in)* | Instructions appended when resuming an existing campaign |
+
+The AI prompts (`DM_PERSONALITY`, `DM_NEW_GAME_INTRO`, `DM_CONTINUATION`) are defined in `.env`. Use `\n` for newlines within the quoted string. This allows you to customize the DM's personality, voice profile, game rules, and session behavior without modifying code.
 
 ### Per-User Config (via `/config` endpoint or Settings UI)
 
 | Field | Description |
 |-------|-------------|
 | `name` | Assistant/DM display name |
-| `personality` | System prompt for the DM |
-| `voice` | Gemini voice name (`Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, etc.) |
+| `personality` | System prompt for the DM (overrides `DM_PERSONALITY` for this user) |
+| `voice` | Gemini voice name (`Algenib`, `Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, etc.) |
 
 ## API
 

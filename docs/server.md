@@ -39,6 +39,9 @@ Runs on port 8765 by default.
 | `API_SECRET` | random hex | Admin authentication key |
 | `PORT` | `8765` | Server listen port |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model name |
+| `DM_PERSONALITY` | Built-in Alistair W. persona | Full system prompt for the DM |
+| `DM_NEW_GAME_INTRO` | Built-in | Instructions appended when starting a new campaign |
+| `DM_CONTINUATION` | Built-in | Instructions appended when resuming an existing campaign |
 
 If `API_SECRET` is not set, the server falls back to `API_KEY` env var, then generates a random token (printed at startup).
 
@@ -74,9 +77,9 @@ Each user has three configurable fields:
 |-------|---------|-------------|
 | `name` | `SoloRolls DM` | Display name for the assistant |
 | `personality` | Built-in DM persona | Full system prompt sent to Gemini |
-| `voice` | `Charon` | Gemini voice name |
+| `voice` | `Algenib` | Gemini voice name |
 
-Available Gemini voices: `Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, and others.
+Available Gemini voices: `Algenib`, `Charon`, `Kore`, `Puck`, `Fenrir`, `Aoede`, and others.
 
 ## Session Management
 
@@ -154,7 +157,7 @@ Users can override this entirely via the `personality` config field.
 
 **Dockerfile:**
 - Base: `python:3.12-slim`
-- Copies `local/server.py`, `local/models.py`, `worker/public/`
+- Copies `local/server.py`, `worker/public/`
 - Exposes port 8787
 
 **docker-compose.yml:**
@@ -168,12 +171,7 @@ Users can override this entirely via the `personality` config field.
 ```
 local/
 ├── server.py          # Main server (Gemini Live relay)
-├── models.py          # Legacy: non-Live Gemini + Fish TTS (unused by server.py)
 ├── requirements.txt   # Python dependencies
 ├── users.json         # User keys and configs (created at runtime)
 └── sessions/          # Per-user session history (created at runtime)
 ```
-
-## Legacy Code
-
-`local/models.py` contains `GeminiModel` and `FishTTS` classes from a previous architecture that used separate STT → LLM → TTS pipeline. It's not imported by the current server but may be useful for future non-streaming features.

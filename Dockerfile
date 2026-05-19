@@ -5,7 +5,7 @@ WORKDIR /app
 COPY local/requirements.txt /app/local/
 RUN pip install --no-cache-dir -r /app/local/requirements.txt
 
-COPY local/server.py local/models.py /app/local/
+COPY local/server.py /app/local/
 COPY worker/public /app/worker/public
 
 EXPOSE 8787

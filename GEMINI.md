@@ -36,9 +36,9 @@ Solo D&D Dungeon Master: ESP32-S3 device + Python server + Gemini Live API for r
 6. Transcriptions accumulated into complete turns, saved to disk on `turn_complete`
 7. On disconnect, flush pending text and save session (unless reset flag set)
 
-**Config fields:** `name`, `personality`, `voice` (Gemini voice name like `Charon`, `Kore`, `Puck`).
+**Config fields:** `name`, `personality`, `voice` (Gemini voice name like `Algenib`, `Charon`, `Kore`, `Puck`).
 
-**Defaults:** name=`SoloRolls DM`, voice=`Charon`, personality=elaborate DM persona with Rollless Roleplay rules.
+**Defaults:** name=`SoloRolls DM`, voice=`Algenib`, personality loaded from `DM_PERSONALITY` env var (elaborate DM persona with Rollless Roleplay rules).
 
 ## Web UI (`worker/public/`)
 
@@ -85,15 +85,13 @@ Key libs: `arduino-audio-tools`, `arduino-audio-driver`, `Arduino_GFX_Library`, 
 
 ## Docker
 
-`Dockerfile` copies `local/server.py`, `local/models.py`, `worker/public/`. Runs on port 8787 internally.
+`Dockerfile` copies `local/server.py` and `worker/public/`. Runs on port 8787 internally.
 
 `docker-compose.yml` maps 8765:8787, mounts `users.json` and `sessions/` for persistence.
 
 ## Legacy / Unused
 
 - `wrangler.toml` — references a Cloudflare Worker (`worker/worker.js`) that no longer exists. The project migrated from CF Workers to the local Python server.
-- `local/models.py` — contains `GeminiModel` and `FishTTS` classes for non-Live API usage. Not imported by `server.py` (which uses Gemini Live directly). May be useful for future non-streaming features.
-- `.env` contains some legacy keys (AWS/Polly, Fish Audio, Cloudflare token) that aren't used by the current server.
 
 ## Deploy
 
@@ -107,4 +105,4 @@ Or directly:
 python local/server.py
 ```
 
-Required env: `GOOGLE_API_KEY`. Optional: `API_SECRET`, `PORT`, `GEMINI_LIVE_MODEL`.
+Required env: `GOOGLE_API_KEY`. Optional: `API_SECRET`, `PORT`, `GEMINI_LIVE_MODEL`, `DM_PERSONALITY`, `DM_NEW_GAME_INTRO`, `DM_CONTINUATION`.

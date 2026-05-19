@@ -11,6 +11,62 @@ const SAMPLE_RATE = 24000 // Gemini outputs 24kHz PCM
 let currentUserMsg = null
 let currentAiMsg = null
 
+// ── Wake Lock & Keep-Alive ────────────────────────────────────────────────────
+
+let wakeLock = null
+
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return
+  try {
+    wakeLock = await navigator.wakeLock.request('screen')
+    wakeLock.addEventListener('release', () => { wakeLock = null })
+  } catch (e) {
+    // Wake lock request failed (e.g. low battery, tab not visible)
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release()
+    wakeLock = null
+  }
+}
+
+// Re-acquire wake lock when page becomes visible again (browser releases it on hide)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && micStream) {
+    requestWakeLock()
+  }
+})
+
+// Silent audio oscillator to keep the audio session alive on mobile
+let keepAliveOsc = null
+let keepAliveGain = null
+
+function startAudioKeepAlive() {
+  ensureAudioCtx()
+  if (keepAliveOsc) return
+  keepAliveOsc = audioCtx.createOscillator()
+  keepAliveGain = audioCtx.createGain()
+  keepAliveOsc.frequency.value = 1 // inaudible 1Hz
+  keepAliveGain.gain.value = 0.001 // essentially silent
+  keepAliveOsc.connect(keepAliveGain)
+  keepAliveGain.connect(audioCtx.destination)
+  keepAliveOsc.start()
+}
+
+function stopAudioKeepAlive() {
+  if (keepAliveOsc) {
+    keepAliveOsc.stop()
+    keepAliveOsc.disconnect()
+    keepAliveOsc = null
+  }
+  if (keepAliveGain) {
+    keepAliveGain.disconnect()
+    keepAliveGain = null
+  }
+}
+
 function flash(id) {
   const el = document.getElementById(id)
   el.style.display = 'inline'
@@ -149,7 +205,9 @@ function connectWS() {
         } else if (msg.type === 'interrupted') {
           finalizeMessages()
           stopPlayback()
-          document.getElementById('status').textContent = 'Interrupted'
+          document.getElementById('status').textContent = micStream
+            ? 'Listening…'
+            : 'Connected — tap mic to talk'
         } else if (msg.type === 'error') {
           finalizeMessages()
           addMsg('Error: ' + msg.message, 'err')
@@ -176,7 +234,7 @@ function connectWS() {
       return
     }
 
-    document.getElementById('status').textContent = 'Disconnected — reconnecting...'
+    // Silently reconnect — only show disconnect status if retries pile up
     scheduleReconnect()
   }
 
@@ -192,7 +250,10 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     if (!ws && key()) {
-      document.getElementById('status').textContent = `Reconnecting (attempt ${reconnectAttempts})...`
+      // Only show disconnect status after multiple failed attempts
+      if (reconnectAttempts > 2) {
+        document.getElementById('status').textContent = `Reconnecting (attempt ${reconnectAttempts})...`
+      }
       connectWS()
     }
   }, delay)
@@ -263,11 +324,9 @@ function playPCM(arrayBuffer) {
 }
 
 function stopPlayback() {
+  // Reset scheduling time so next audio plays immediately
+  // Don't close audioCtx — closing it requires a user gesture to recreate
   nextPlayTime = 0
-  if (audioCtx) {
-    audioCtx.close()
-    audioCtx = null
-  }
 }
 
 // ── Microphone streaming ──────────────────────────────────────────────────────
@@ -297,6 +356,10 @@ async function startMic() {
     document.getElementById('status').textContent = 'Mic access denied'
     return
   }
+
+  // Keep screen awake and audio session alive while mic is active
+  requestWakeLock()
+  startAudioKeepAlive()
 
   ensureAudioCtx()
 
@@ -343,6 +406,10 @@ function stopMic() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'end_audio' }))
   }
+
+  // Release screen wake lock and stop audio keepalive
+  releaseWakeLock()
+  stopAudioKeepAlive()
 
   document.getElementById('recBtn').classList.remove('recording')
   document.getElementById('status').textContent = 'Connected — tap mic to talk'

@@ -9,3 +9,5 @@ __pycache__
 .vscode
 local/sessions/*
 local/.venv
+local/keepalive.sh
+local/*.out
